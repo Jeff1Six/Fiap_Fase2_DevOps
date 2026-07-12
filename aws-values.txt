@@ -1,0 +1,11 @@
+AWS_ACCOUNT_ID=107539709966
+AWS_REGION=us-east-1
+
+AWS_SQS_URL=https://sqs.us-east-1.amazonaws.com/107539709966/togglemaster-events
+AWS_DYNAMODB_TABLE=ToggleMasterAnalytics
+
+ECR_AUTH_IMAGE=107539709966.dkr.ecr.us-east-1.amazonaws.com/auth-service:latest
+ECR_FLAG_IMAGE=107539709966.dkr.ecr.us-east-1.amazonaws.com/flag-service:latest
+ECR_TARGETING_IMAGE=107539709966.dkr.ecr.us-east-1.amazonaws.com/targeting-service:latest
+ECR_EVALUATION_IMAGE=107539709966.dkr.ecr.us-east-1.amazonaws.com/evaluation-service:latest
+ECR_ANALYTICS_IMAGE=107539709966.dkr.ecr.us-east-1.amazonaws.com/analytics-service:latest
