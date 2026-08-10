@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: desafio2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-configmap
+  namespace: desafio2
+data:
+  DB_PORT: "5432"
+  DB_AUTH_NAME: "authdb"
+  DB_FLAG_NAME: "flagdb"
+  DB_TARGET_NAME: "targetingdb"
+  DB_AUTH_HOST: "authdb.cwzjbni3z8ym.us-east-1.rds.amazonaws.com"
+  DB_FLAG_HOST: "flagdb.cwzjbni3z8ym.us-east-1.rds.amazonaws.com"
+  DB_TARGET_HOST: "targetingdb.cwzjbni3z8ym.us-east-1.rds.amazonaws.com"
+  REDIS_HOST: "redis-2-c49f6l.serverless.use1.cache.amazonaws.com"
+  REDIS_PORT: "6379"
+  AUTH_SERVICE_URL: "http://auth-service-svc.desafio2.svc.cluster.local:8080"
+  FLAG_SERVICE_URL: "http://flag-service-svc.desafio2.svc.cluster.local:8080"
+  TARGETING_SERVICE_URL: "http://targeting-service-svc.desafio2.svc.cluster.local:8080"
+  AWS_SQS_URL: "https://sqs.us-east-1.amazonaws.com/297922603388/analytics-queue"
+  PORT: "8080"
+  APP_PORT: "8080"
+  AWS_REGION: "us-east-1"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: desafio2
+type: Opaque
+data:
+  DB_AUTH_USER: "YXV0aF91c2Vy"
+  DB_FLAG_USER: "ZmxhZ191c2Vy"
+  DB_TARGET_USER: "dGFyZ2V0aW5nX3VzZXI="
+  DB_AUTH_PASSWORD: "YXV0aF9wYXNzd29yZA=="
+  DB_FLAG_PASSWORD: "ZmxhZ19wYXNzd29yZA=="
+  DB_TARGET_PASSWORD: "dGFyZ2V0aW5nX3Bhc3N3b3Jk"
+  MASTER_KEY: "YWRtaW4tc2VjcmV0by0xMjM="
+  SERVICE_API_KEY: "dG1fa2V5X2M3NDk5MjMyOTUzOTkzMmI0MTU1NmNiZTMzZmQyYmYxYWYyODA0ZmM2MWQwOWI4YjY0ZWE3YmQ3NzVmYzJkNTU="
+  AWS_ACCESS_KEY_ID: "QVNJQVVLWE1TRkY2UFE3NkkyMk0="
+  AWS_SECRET_ACCESS_KEY: "K0NLN0F6N0dnZGRRWHBFcGpRNVlMTUZoM0tseVR4T1BCT1RoOWVmRQ=="
+  AWS_SESSION_TOKEN: "SVFvSmIzSnBaMmx1WDJWakVOTC8vLy8vLy8vLy93RWFDWFZ6TFhkbGMzUXRNaUpHTUVRQ0lCTDlEK2VCZFRqbmY2bng2bnZ4UUtudTFwTy9WcW1zVUJmWjVWWlJheVZBQWlBamxUSENQU25NYlI0ZU55YnBmTnVwVitUVDlLb3BJb1hUa1hPb05Td3lpQ3F2QWdpYi8vLy8vLy8vLy84QkVBQWFEREk1TnpreU1qWXdNek00T0NJTVFOcFNQMVd2N1VtdUx1OHlLb01DNk8xUCtRSEpJbzJGNFUxWWtLeVFVMm9RcjJPY25LSmZkUStJeHp3WlN3ODdkdHJkTGlLYmQxaEZheGFKZHI2QWxtTENHSDhOaFg1Nmx3SWZzMW1OV2xOUHlXZzBreDlubmpzdkdnK01HeTlXOXg1TVBoZElMdjBSSnUvQjFDTmcyZm9FU0Y1M1lkZkpqeGhEeVhtYjZlN0RubUtXSE8vWGwwQkVTSkxVWFJXN0VYdUVUU3JBYzJSOGRQVzZxTDM2MzZDVnZIUUxLdmFrdm1xRzFmOVd2RlBKZVZNYlFGSTM5VWxua2w4ZnZZQk9oSVFjVStodTJURGQwUHI5RE1IN2FHWDlLUFFKTUNBY2JHUmpUUGowZWphMUlBY1RNYUNhZHpsZjhlKzBhNi9QTFpBUGJJMkRVKzVoOVVWNkJENUhIS2ZwNHNJOU5BbkNCcitvMExxNEdIdG15VERIb2MzUkJqcWVBYXFwOG5USlRFclYweStybkxEZUpQUUZmZHQraWpXUTNXSXZ0M21EMGt5a0xBZ3pjWmlhTlVuQlFyN0graFZIUkxDbjMvNG9JMzNLOVRIV0xINzA3QmtCaGF5aE5xOG9MQ2ZmMlNpWTNBWHBSU0t3SUc2SjQ2YkFKTGR3L0U4eUtWRE81ZHdqNFJXcjRSeTQ5WUpVMXlla3gvRFMzSmpBSm1yakY1RTVQN2R1a0xOMkZDRDFQdlFJTWhvdEZBQlhqRDJJdjl1YUErdHVUR3dBUEdoWA=="

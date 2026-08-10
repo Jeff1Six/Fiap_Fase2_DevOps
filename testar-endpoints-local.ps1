@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 
 function Write-Step {
     param([string]$Title)
+
     Write-Host ""
     Write-Host "============================================================" -ForegroundColor Cyan
     Write-Host $Title -ForegroundColor Cyan
@@ -16,20 +17,28 @@ function Write-Step {
 
 function Write-Success {
     param([string]$Message)
+
     Write-Host "[OK] $Message" -ForegroundColor Green
 }
 
 function Write-WarningMessage {
     param([string]$Message)
+
     Write-Host "[AVISO] $Message" -ForegroundColor Yellow
 }
 
 function Invoke-JsonRequest {
     param(
-        [Parameter(Mandatory = $true)][string]$Uri,
-        [ValidateSet("GET", "POST", "PUT", "DELETE")][string]$Method = "GET",
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+
+        [ValidateSet("GET", "POST", "PUT", "DELETE")]
+        [string]$Method = "GET",
+
         [hashtable]$Headers = @{},
+
         [object]$Body = $null,
+
         [int[]]$AllowedStatusCodes = @(200, 201, 204)
     )
 
@@ -43,6 +52,7 @@ function Invoke-JsonRequest {
 
         if ($null -ne $Body) {
             $json = $Body | ConvertTo-Json -Depth 10 -Compress
+
             $params.ContentType = "application/json; charset=utf-8"
             $params.Body = [System.Text.Encoding]::UTF8.GetBytes($json)
         }
@@ -66,32 +76,139 @@ function Invoke-JsonRequest {
         if ($_.Exception.Response) {
             try {
                 $statusCode = [int]$_.Exception.Response.StatusCode
-            } catch {}
+            }
+            catch {}
 
             try {
-                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                $reader = New-Object System.IO.StreamReader(
+                    $_.Exception.Response.GetResponseStream()
+                )
+
                 $responseBody = $reader.ReadToEnd()
                 $reader.Close()
-            } catch {}
+            }
+            catch {}
         }
 
-        $details = if ($responseBody) { $responseBody } else { $_.Exception.Message }
+        $details = if ($responseBody) {
+            $responseBody
+        }
+        else {
+            $_.Exception.Message
+        }
 
-        $exception = New-Object System.Exception("Falha em $Method $Uri | Status: $statusCode | Resposta: $details")
+        $exception = New-Object System.Exception(
+            "Falha em $Method $Uri | Status: $statusCode | Resposta: $details"
+        )
+
         $exception.Data["StatusCode"] = $statusCode
         $exception.Data["ResponseBody"] = $responseBody
+
         throw $exception
     }
+}
+
+function Wait-ServiceHealth {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServiceName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$HealthUrl,
+
+        [int]$MaxAttempts = 30,
+
+        [int]$DelaySeconds = 2
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            $health = Invoke-JsonRequest -Uri $HealthUrl
+
+            if ($health.status -eq "ok") {
+                Write-Success "$ServiceName esta disponivel novamente."
+                return
+            }
+        }
+        catch {
+            Write-Host (
+                "Aguardando $ServiceName... tentativa $attempt de $MaxAttempts"
+            ) -ForegroundColor DarkYellow
+        }
+
+        Start-Sleep -Seconds $DelaySeconds
+    }
+
+    throw "$ServiceName nao ficou disponivel dentro do tempo esperado."
+}
+
+function Update-EvaluationServiceApiKey {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ApiKey
+    )
+
+    Write-Step "2.1 CONFIGURANDO A CHAVE NO EVALUATION-SERVICE"
+
+    $previousServiceApiKey = $env:SERVICE_API_KEY
+
+    try {
+        # A variável será utilizada pelo docker-compose.yml:
+        # SERVICE_API_KEY: "${SERVICE_API_KEY:-}"
+        $env:SERVICE_API_KEY = $ApiKey
+
+        Write-Host "Recriando somente o evaluation-service..." -ForegroundColor Yellow
+
+        docker compose up `
+            -d `
+            --no-deps `
+            --force-recreate `
+            evaluation-service
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Nao foi possivel recriar o evaluation-service."
+        }
+    }
+    finally {
+        # Remove a chave do terminal depois que ela já foi injetada no container.
+        if ($null -eq $previousServiceApiKey) {
+            Remove-Item Env:SERVICE_API_KEY -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:SERVICE_API_KEY = $previousServiceApiKey
+        }
+    }
+
+    Wait-ServiceHealth `
+        -ServiceName "evaluation-service" `
+        -HealthUrl "$BaseUrl`:8004/health"
+
+    Write-Success "Chave configurada no evaluation-service."
 }
 
 Write-Step "1. VERIFICANDO OS 5 MICROSSERVICOS"
 
 $services = @(
-    @{ Name = "auth-service";       Url = "$BaseUrl`:8001/health" },
-    @{ Name = "flag-service";       Url = "$BaseUrl`:8002/health" },
-    @{ Name = "targeting-service";  Url = "$BaseUrl`:8003/health" },
-    @{ Name = "evaluation-service"; Url = "$BaseUrl`:8004/health" },
-    @{ Name = "analytics-service";  Url = "$BaseUrl`:8005/health" }
+    @{
+        Name = "auth-service"
+        Url  = "$BaseUrl`:8001/health"
+    },
+    @{
+        Name = "flag-service"
+        Url  = "$BaseUrl`:8002/health"
+    },
+    @{
+        Name = "targeting-service"
+        Url  = "$BaseUrl`:8003/health"
+    },
+    @{
+        Name = "evaluation-service"
+        Url  = "$BaseUrl`:8004/health"
+    },
+    @{
+        Name = "analytics-service"
+        Url  = "$BaseUrl`:8005/health"
+    }
 )
 
 foreach ($service in $services) {
@@ -111,8 +228,12 @@ $keyName = "video-demo-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 $keyResponse = Invoke-JsonRequest `
     -Uri "$BaseUrl`:8001/admin/keys" `
     -Method POST `
-    -Headers @{ Authorization = "Bearer $MasterKey" } `
-    -Body @{ name = $keyName }
+    -Headers @{
+        Authorization = "Bearer $MasterKey"
+    } `
+    -Body @{
+        name = $keyName
+    }
 
 $apiKey = $keyResponse.key
 
@@ -120,8 +241,17 @@ if ([string]::IsNullOrWhiteSpace($apiKey)) {
     throw "O auth-service nao retornou uma chave de API."
 }
 
-Write-Success "Chave criada: $($apiKey.Substring(0, [Math]::Min(18, $apiKey.Length)))..."
-$authHeaders = @{ Authorization = "Bearer $apiKey" }
+$keyPreviewLength = [Math]::Min(18, $apiKey.Length)
+$keyPreview = $apiKey.Substring(0, $keyPreviewLength)
+
+Write-Success "Chave criada: $keyPreview..."
+
+$authHeaders = @{
+    Authorization = "Bearer $apiKey"
+}
+
+# Injeta a chave criada no evaluation-service.
+Update-EvaluationServiceApiKey -ApiKey $apiKey
 
 Write-Step "3. VALIDANDO A CHAVE NO AUTH-SERVICE"
 
@@ -130,7 +260,10 @@ $validation = Invoke-JsonRequest `
     -Headers $authHeaders
 
 Write-Success "Chave validada pelo auth-service"
-$validation | Format-List | Out-Host
+
+$validation |
+    Format-List |
+    Out-Host
 
 Write-Step "4. CRIANDO OU ATUALIZANDO A FEATURE FLAG"
 
@@ -173,7 +306,9 @@ $flag = Invoke-JsonRequest `
     -Uri "$BaseUrl`:8002/flags/$FlagName" `
     -Headers $authHeaders
 
-$flag | Format-List | Out-Host
+$flag |
+    Format-List |
+    Out-Host
 
 Write-Step "5. CRIANDO OU ATUALIZANDO A REGRA DE TARGETING"
 
@@ -222,7 +357,9 @@ $rule = Invoke-JsonRequest `
     -Uri "$BaseUrl`:8003/rules/$FlagName" `
     -Headers $authHeaders
 
-$rule | Format-List | Out-Host
+$rule |
+    Format-List |
+    Out-Host
 
 Write-Step "6. TESTANDO O EVALUATION-SERVICE"
 
@@ -233,17 +370,35 @@ $userIds = @(
 )
 
 foreach ($userId in $userIds) {
-    $evaluation = Invoke-JsonRequest `
-        -Uri "$BaseUrl`:8004/evaluate?user_id=$userId&flag_name=$FlagName"
+    $encodedUserId = [System.Uri]::EscapeDataString($userId)
+    $encodedFlagName = [System.Uri]::EscapeDataString($FlagName)
 
-    $resultText = if ($evaluation.result) { "TRUE" } else { "FALSE" }
+    $evaluationUrl = (
+        "$BaseUrl`:8004/evaluate" +
+        "?user_id=$encodedUserId" +
+        "&flag_name=$encodedFlagName"
+    )
 
-    Write-Host ("Usuario: {0,-22} Resultado: {1}" -f $evaluation.user_id, $resultText) -ForegroundColor Magenta
+    $evaluation = Invoke-JsonRequest -Uri $evaluationUrl
+
+    $resultText = if ($evaluation.result) {
+        "TRUE"
+    }
+    else {
+        "FALSE"
+    }
+
+    Write-Host (
+        "Usuario: {0,-22} Resultado: {1}" -f
+        $evaluation.user_id,
+        $resultText
+    ) -ForegroundColor Magenta
 }
 
 Write-Step "7. AGUARDANDO O ANALYTICS PROCESSAR OS EVENTOS"
 
 Start-Sleep -Seconds 3
+
 Write-Success "Eventos enviados para a fila pelo evaluation-service."
 
 Write-Host ""
@@ -255,4 +410,5 @@ Write-Host "Para mostrar os dados gravados no DynamoDB Local, rode:" -Foreground
 Write-Host "aws dynamodb scan --table-name ToggleMasterAnalytics --endpoint-url http://127.0.0.1:8000 --region us-east-1 --no-cli-pager" -ForegroundColor White
 
 Write-Step "DEMONSTRACAO FINALIZADA"
+
 Write-Success "Auth, Flag, Targeting, Evaluation e Analytics foram exercitados."
