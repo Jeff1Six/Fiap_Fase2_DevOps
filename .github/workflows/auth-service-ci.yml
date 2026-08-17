@@ -164,7 +164,7 @@ jobs:
         working-directory: terraform
         shell: bash
         run: |
-          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."auth-service"')
+          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."auth"')
 
           if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
             echo "URL do auth-service não encontrada nos outputs."
