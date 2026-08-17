@@ -311,8 +311,8 @@ resource "aws_db_instance" "main" {
 
 # Armazenamento seguro dos dados de conexao do banco no Secrets Manager
 resource "aws_secretsmanager_secret" "db_credentials" {
-  for_each = nonsensitive(var.databases)
-  name     = "${var.project_name}/${var.environment}/db/${each.key}"
+  for_each                = nonsensitive(var.databases)
+  name                    = "${var.project_name}/${var.environment}/db/${each.key}"
   recovery_window_in_days = 0
 }
 
