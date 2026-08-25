@@ -110,7 +110,7 @@ jobs:
           ignore-unfixed: true
 
   # =========================================================
-  # 4 - DOCKER BUILD, SCAN & PUSH
+  # 4 - DOCKER BUILD, SCAN & PUSH s
   # =========================================================
   docker:
     name: Docker Build, Scan & Push
