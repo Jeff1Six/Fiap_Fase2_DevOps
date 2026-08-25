@@ -138,6 +138,10 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+      # -------------------------------------------------------
+      # Os passos abaixo executam somente em Push na Main
+      # -------------------------------------------------------
+
       - name: Configure AWS Credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
@@ -145,7 +149,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -171,6 +175,7 @@ jobs:
             exit 1
           fi
 
+          echo "ECR URL: ${ECR_URL}"
           echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Login to Amazon ECR
@@ -184,7 +189,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker tag \
-            togglemaster-auth:${IMAGE_TAG} \
+            "togglemaster-auth:${IMAGE_TAG}" \
             "${ECR_URL}:${IMAGE_TAG}"
 
       - name: Push Docker Image
