@@ -221,7 +221,7 @@ resource "aws_security_group" "redis" {
 # ------------------------------------------------------------------------------
 resource "aws_ecr_repository" "microservices" {
   for_each             = var.microservices
-  name                 = "${var.project_name}-${each.value}"
+  name                 = "${var.project_name}-${each.value}-service"
   force_delete         = true
   image_tag_mutability = "IMMUTABLE"
 
