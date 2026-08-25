@@ -21,7 +21,6 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-
   # =========================================================
   # 1 - BUILD & UNIT TEST
   # =========================================================
@@ -110,7 +109,7 @@ jobs:
           ignore-unfixed: true
 
   # =========================================================
-  # 4 - DOCKER BUILD, SCAN & PUSH s
+  # 4 - DOCKER BUILD, SCAN & PUSH
   # =========================================================
   docker:
     name: Docker Build, Scan & Push
@@ -128,13 +127,13 @@ jobs:
         working-directory: auth-service
         run: |
           docker build \
-            --tag togglemaster-auth-service:${{ github.sha }} \
+            --tag togglemaster-auth:${{ github.sha }} \
             .
 
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: togglemaster-auth-service:${{ github.sha }}
+          image-ref: togglemaster-auth:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
@@ -165,14 +164,13 @@ jobs:
         working-directory: terraform
         shell: bash
         run: |
-          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."auth"')
+          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."auth-service"')
 
           if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
             echo "URL do auth-service não encontrada nos outputs."
             exit 1
           fi
 
-          echo "ECR URL encontrada: ${ECR_URL}"
           echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Login to Amazon ECR
@@ -186,7 +184,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker tag \
-            togglemaster-auth-service:${IMAGE_TAG} \
+            togglemaster-auth:${IMAGE_TAG} \
             "${ECR_URL}:${IMAGE_TAG}"
 
       - name: Push Docker Image
