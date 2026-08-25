@@ -195,3 +195,109 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker push "${ECR_URL}:${IMAGE_TAG}"
+  # =========================================================
+  # 5 - DEPLOY TO EKS
+  # =========================================================
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: docker
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Read EKS Cluster Name
+        id: terraform-output
+        working-directory: terraform
+        shell: bash
+        run: |
+          EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
+
+          if [ -z "${EKS_CLUSTER_NAME}" ]; then
+            echo "Nome do cluster EKS não encontrado."
+            exit 1
+          fi
+
+          echo "eks_cluster_name=${EKS_CLUSTER_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Configure kubectl for EKS
+        env:
+          EKS_CLUSTER_NAME: ${{ steps.terraform-output.outputs.eks_cluster_name }}
+        run: |
+          aws eks update-kubeconfig \
+            --region "${AWS_REGION}" \
+            --name "${EKS_CLUSTER_NAME}"
+
+      - name: Check EKS Nodes
+        run: kubectl get nodes
+
+      - name: Apply Kubernetes Manifests
+        run: |
+          kubectl apply -f k8s/00-namespace.yaml
+          kubectl apply -f k8s/01-configmap.generated.yaml
+          kubectl apply -f k8s/02-secret.yaml
+          kubectl apply -f k8s/03-apps-deployments.yaml
+          kubectl apply -f k8s/04-ingress-e-hpa.yaml
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update Auth Service Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          kubectl set image \
+            deployment/auth-service \
+            auth-service="${ECR_REGISTRY}/auth-service:${IMAGE_TAG}" \
+            -n desafio3
+
+      - name: Wait for Auth Service Rollout
+        run: |
+          kubectl rollout status \
+            deployment/auth-service \
+            -n desafio3 \
+            --timeout=180s
+
+      - name: Show Deployment Status
+        run: |
+          echo "===== NODES ====="
+          kubectl get nodes
+
+          echo "===== PODS ====="
+          kubectl get pods -n desafio3 -o wide
+
+          echo "===== SERVICES ====="
+          kubectl get svc -n desafio3
+
+          echo "===== DEPLOYMENTS ====="
+          kubectl get deployments -n desafio3
