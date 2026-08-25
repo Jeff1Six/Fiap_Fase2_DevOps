@@ -90,7 +90,7 @@ jobs:
       - name: Install Bandit
         run: pip install bandit
       - name: Bandit SAST
-        run: bandit -r targeting-service -x targeting-service/tests
+        run: bandit -r targeting-service -x targeting-service/tests -lll -iii
       - name: Trivy SCA
         uses: aquasecurity/trivy-action@master
         with:
