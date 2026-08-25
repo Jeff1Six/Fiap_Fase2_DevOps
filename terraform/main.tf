@@ -164,18 +164,18 @@ resource "aws_security_group" "eks_nodes" {
   }
 }
 
-# SG para o RDS (Permite conexao vinda APENAS dos Nodes do EKS)
+# SG para o RDS
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-${var.environment}-rds-sg"
   description = "Security Group para os bancos de dados RDS"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "PostgreSQL vindo do EKS Node Group"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.eks_nodes.id]
+    description = "PostgreSQL vindo da VPC"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
   }
 
   egress {
@@ -190,18 +190,18 @@ resource "aws_security_group" "rds" {
   }
 }
 
-# SG para o Redis (Permite conexao vinda APENAS dos Nodes do EKS)
+# SG para o Redis
 resource "aws_security_group" "redis" {
   name        = "${var.project_name}-${var.environment}-redis-sg"
   description = "Security Group para o ElastiCache Redis"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "Redis vindo do EKS Node Group"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.eks_nodes.id]
+    description = "Redis vindo da VPC"
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
   }
 
   egress {

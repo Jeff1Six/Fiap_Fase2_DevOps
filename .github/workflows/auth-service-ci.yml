@@ -274,11 +274,12 @@ jobs:
       - name: Update Auth Service Image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: togglemaster-auth-service
           IMAGE_TAG: ${{ github.sha }}
         run: |
           kubectl set image \
             deployment/auth-service \
-            auth-service="${ECR_REGISTRY}/auth-service:${IMAGE_TAG}" \
+            auth-service="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
             -n desafio3
 
       - name: Wait for Auth Service Rollout
@@ -286,7 +287,7 @@ jobs:
           kubectl rollout status \
             deployment/auth-service \
             -n desafio3 \
-            --timeout=180s
+            --timeout=300s
 
       - name: Show Deployment Status
         run: |
