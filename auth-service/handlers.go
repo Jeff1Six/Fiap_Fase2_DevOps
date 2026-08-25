@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Estrutura para o corpo da requisição de criação de chaveeee
+// Estrutura para o corpo da requisição de criação de chavee
 type CreateKeyRequest struct {
 	Name string `json:"name"`
 }
