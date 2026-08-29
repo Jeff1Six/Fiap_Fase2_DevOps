@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
-# Carrega .env para desenvolvimento local
+# Carrega .env para desenvolvimento locall
 load_dotenv()
 
 # --- Configuração ---
