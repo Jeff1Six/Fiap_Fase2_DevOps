@@ -250,7 +250,7 @@ if __name__ == "__main__":
     )
 
     app.run(
-        host="0.0.0.0", # nosec B104 - necessário para container/Kubernetes
+        host="0.0.0.0",  # nosec B104 - necessário para container/Kubernetes
         port=port,
         debug=False,
     )
