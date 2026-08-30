@@ -129,7 +129,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
-  # =========================================================
+    # =========================================================
   # 4 - DOCKER BUILD, SCAN & PUSH
   # =========================================================
   docker:
@@ -179,7 +179,7 @@ jobs:
         working-directory: terraform
         run: terraform init -input=false
 
-      - name: Read analytics ECR URL
+      - name: Read Analytics ECR URL
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: terraform-output
         working-directory: terraform
