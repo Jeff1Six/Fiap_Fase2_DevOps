@@ -151,11 +151,16 @@ jobs:
           docker tag togglemaster-evaluation-service:${IMAGE_TAG} "${ECR_URL}:${IMAGE_TAG}"
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
+  # =========================================================
+  # 5 - DEPLOY TO EKS
+  # =========================================================
   deploy:
     name: Deploy to EKS
     runs-on: ubuntu-latest
     needs: docker
+
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     permissions:
       contents: read
 
@@ -180,19 +185,19 @@ jobs:
         working-directory: terraform
         run: terraform init -input=false
 
-      - name: Read Terraform Outputs
+      - name: Read EKS Cluster Name
         id: terraform-output
         working-directory: terraform
         shell: bash
         run: |
           EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
-          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."evaluation"')
-          if [ -z "${EKS_CLUSTER_NAME}" ] || [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
-            echo "Required Terraform outputs were not found."
+
+          if [ -z "${EKS_CLUSTER_NAME}" ]; then
+            echo "Nome do cluster EKS não encontrado."
             exit 1
           fi
+
           echo "eks_cluster_name=${EKS_CLUSTER_NAME}" >> "$GITHUB_OUTPUT"
-          echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
@@ -202,7 +207,13 @@ jobs:
       - name: Configure kubectl for EKS
         env:
           EKS_CLUSTER_NAME: ${{ steps.terraform-output.outputs.eks_cluster_name }}
-        run: aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
+        run: |
+          aws eks update-kubeconfig \
+            --region "${AWS_REGION}" \
+            --name "${EKS_CLUSTER_NAME}"
+
+      - name: Check EKS Nodes
+        run: kubectl get nodes
 
       - name: Apply Kubernetes Manifests
         run: |
@@ -212,15 +223,38 @@ jobs:
           kubectl apply -f k8s/03-apps-deployments.yaml
           kubectl apply -f k8s/04-ingress-e-hpa.yaml
 
-      - name: Update evaluation-service Image
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update Evaluation Service Image
         env:
-          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: togglemaster-evaluation-service
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          kubectl set image deployment/evaluation-service evaluation-service="${ECR_URL}:${IMAGE_TAG}" -n desafio3
+          kubectl set image \
+            deployment/evaluation-service \
+            evaluation-service="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
+            -n desafio3
 
-      - name: Wait for Rollout
-        run: kubectl rollout status deployment/evaluation-service -n desafio3 --timeout=300s
+      - name: Wait for evaluation Service Rollout
+        run: |
+          kubectl rollout status \
+            deployment/evaluation-service \
+            -n desafio3 \
+            --timeout=300s
 
       - name: Show Deployment Status
-        run: kubectl get pods,services,deployments -n desafio3 -o wide
+        run: |
+          echo "===== NODES ====="
+          kubectl get nodes
+
+          echo "===== PODS ====="
+          kubectl get pods -n desafio3 -o wide
+
+          echo "===== SERVICES ====="
+          kubectl get svc -n desafio3
+
+          echo "===== DEPLOYMENTS ====="
+          kubectl get deployments -n desafio3
