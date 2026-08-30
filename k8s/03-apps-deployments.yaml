@@ -363,7 +363,7 @@ spec:
               valueFrom:
                 configMapKeyRef: { name: app-configmap, key: REDIS_PORT }
             - name: REDIS_URL
-              value: "rediss://$(REDIS_HOST):$(REDIS_PORT)"
+              value: "redis://$(REDIS_HOST):$(REDIS_PORT)"
             - name: FLAG_SERVICE_URL
               valueFrom:
                 configMapKeyRef: { name: app-configmap, key: FLAG_SERVICE_URL }
