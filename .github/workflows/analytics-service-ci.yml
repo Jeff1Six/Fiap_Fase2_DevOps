@@ -153,28 +153,46 @@ jobs:
       - name: Docker Build
         run: |
           docker build \
-            -t togglemaster-analytics:${{ github.sha }} \
+            -t togglemaster-analytics-service:${{ github.sha }} \
             .
 
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: togglemaster-analytics:${{ github.sha }}
+          image-ref: togglemaster-analytics-service:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
 
-      # =====================================================
-      # ECR - somente após merge / push na main
-      # =====================================================
+  # =========================================================
+  # 4 - DOCKER BUILD, SCAN & PUSH
+  # =========================================================
+  docker:
+    name: Docker Build, Scan & Push
+    runs-on: ubuntu-latest
+    needs: security
 
-      - name: Generate Image Tag
-        id: version
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Docker Build
+        working-directory: analytics-service
         run: |
-          SHORT_SHA=${GITHUB_SHA::7}
-          echo "tag=v1.0.${{ github.run_number }}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          docker build \
+            --tag togglemaster-analytics-service:${{ github.sha }} \
+            .
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: togglemaster-analytics-service:${{ github.sha }}
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
 
       - name: Configure AWS Credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -183,22 +201,161 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Read analytics ECR URL
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: terraform-output
+        working-directory: terraform
+        shell: bash
+        run: |
+          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."analytics"')
+
+          if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
+            echo "URL do analytics-service não encontrada nos outputs."
+            exit 1
+          fi
+
+          echo "ECR URL encontrada: ${ECR_URL}"
+          echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Login to Amazon ECR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Tag Docker Image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker tag \
-            togglemaster-analytics:${{ github.sha }} \
-            ${{ steps.login-ecr.outputs.registry }}/${{ vars.ANALYTICS_ECR_REPOSITORY }}:${{ steps.version.outputs.tag }}
+            togglemaster-analytics-service:${IMAGE_TAG} \
+            "${ECR_URL}:${IMAGE_TAG}"
 
       - name: Push Docker Image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker push \
-            ${{ steps.login-ecr.outputs.registry }}/${{ vars.ANALYTICS_ECR_REPOSITORY }}:${{ steps.version.outputs.tag }}
+          docker push "${ECR_URL}:${IMAGE_TAG}"
+          
+  # =========================================================
+  # 5 - DEPLOY TO EKS
+  # =========================================================
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: docker
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Read EKS Cluster Name
+        id: terraform-output
+        working-directory: terraform
+        shell: bash
+        run: |
+          EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
+
+          if [ -z "${EKS_CLUSTER_NAME}" ]; then
+            echo "Nome do cluster EKS não encontrado."
+            exit 1
+          fi
+
+          echo "eks_cluster_name=${EKS_CLUSTER_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Configure kubectl for EKS
+        env:
+          EKS_CLUSTER_NAME: ${{ steps.terraform-output.outputs.eks_cluster_name }}
+        run: |
+          aws eks update-kubeconfig \
+            --region "${AWS_REGION}" \
+            --name "${EKS_CLUSTER_NAME}"
+
+      - name: Check EKS Nodes
+        run: kubectl get nodes
+
+      - name: Apply Kubernetes Manifests
+        run: |
+          kubectl apply -f k8s/00-namespace.yaml
+          kubectl apply -f k8s/01-configmap.generated.yaml
+          kubectl apply -f k8s/02-secret.yaml
+          kubectl apply -f k8s/03-apps-deployments.yaml
+          kubectl apply -f k8s/04-ingress-e-hpa.yaml
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update analytics Service Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: togglemaster-analytics-service
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          kubectl set image \
+            deployment/analytics-service \
+            analytics-service="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
+            -n desafio3
+
+      - name: Wait for analytics Service Rollout
+        run: |
+          kubectl rollout status \
+            deployment/analytics-service \
+            -n desafio3 \
+            --timeout=300s
+
+      - name: Show Deployment Status
+        run: |
+          echo "===== NODES ====="
+          kubectl get nodes
+
+          echo "===== PODS ====="
+          kubectl get pods -n desafio3 -o wide
+
+          echo "===== SERVICES ====="
+          kubectl get svc -n desafio3
+
+          echo "===== DEPLOYMENTS ====="
+          kubectl get deployments -n desafio3
