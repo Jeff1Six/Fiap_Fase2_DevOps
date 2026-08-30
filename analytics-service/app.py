@@ -214,7 +214,7 @@ app = Flask(__name__)
 
 @app.route("/health")
 def health():
-    # Uma verificação de saúde real poderia checar DynamoDB/SQS
+    # Uma verificação de saúde real poderia checar DynamoDB/SQSa
     return jsonify(
         {
             "status": "ok",
