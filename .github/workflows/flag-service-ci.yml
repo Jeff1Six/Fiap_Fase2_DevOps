@@ -212,7 +212,7 @@ jobs:
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
   # =========================================================
-  # 5 - UPDATE GITOPS
+  # 5 - UPDATE GITOPSS
   # =========================================================
   gitops:
     name: Update GitOps
