@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY . .
 
-RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+RUN adduser -D -h /home/appuser appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
