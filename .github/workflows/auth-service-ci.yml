@@ -280,6 +280,7 @@ jobs:
       - name: Commit GitOps Change
         env:
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -292,6 +293,13 @@ jobs:
           fi
 
           git commit \
-            -m "chore(gitops): update auth-service image to ${IMAGE_TAG}"
+          -m "chore(gitops): update auth-service image to ${IMAGE_TAG}"
 
-          git push
+          echo "Atualizando branch local..."
+
+          git fetch origin main
+          git rebase origin/main
+
+          echo "Enviando alteração GitOps..."
+
+          git push origin HEAD:main
