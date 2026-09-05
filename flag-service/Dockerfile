@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY . .
 
-RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+RUN adduser -D appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
