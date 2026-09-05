@@ -58,7 +58,7 @@ spec:
           '
       containers:
       - name: auth-service
-        image: :14779cc3edecbcc5ced06af87668d9e7a7a0e210
+        image: :268be5441e406870778285a3c36dddab1e4cde97
         ports:
         - containerPort: 8001
         env:
