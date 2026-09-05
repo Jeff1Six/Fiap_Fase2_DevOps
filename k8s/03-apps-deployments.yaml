@@ -16,98 +16,98 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       initContainers:
-      - name: init-db-and-tables
-        image: postgres:15-alpine
-        env:
-        - name: PGUSER
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_AUTH_USER
-        - name: PGPASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_AUTH_PASSWORD
-        - name: PGHOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_AUTH_HOST
-        - name: PGPORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_PORT
-        - name: TARGET_DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_AUTH_NAME
-        command:
-        - sh
-        - -c
-        - 'psql -d postgres -c "CREATE DATABASE ${TARGET_DB_NAME};" 2>/dev/null ||
-          true
+        - name: init-db-and-tables
+          image: postgres:15-alpine
+          env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_AUTH_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_AUTH_PASSWORD
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_AUTH_HOST
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_PORT
+            - name: TARGET_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_AUTH_NAME
+          command:
+            - sh
+            - -c
+            - 'psql -d postgres -c "CREATE DATABASE ${TARGET_DB_NAME};" 2>/dev/null ||
+              true
 
-          psql -d ${TARGET_DB_NAME} -c "CREATE TABLE IF NOT EXISTS api_keys (id SERIAL
-          PRIMARY KEY, name VARCHAR(100) NOT NULL, key_hash VARCHAR(64) NOT NULL UNIQUE,
-          is_active BOOLEAN DEFAULT true, created_at TIMESTAMP WITH TIME ZONE DEFAULT
-          CURRENT_TIMESTAMP);"
+              psql -d ${TARGET_DB_NAME} -c "CREATE TABLE IF NOT EXISTS api_keys (id SERIAL
+              PRIMARY KEY, name VARCHAR(100) NOT NULL, key_hash VARCHAR(64) NOT NULL UNIQUE,
+              is_active BOOLEAN DEFAULT true, created_at TIMESTAMP WITH TIME ZONE DEFAULT
+              CURRENT_TIMESTAMP);"
 
-          '
+              '
       containers:
-      - name: auth-service
-        image: :268be5441e406870778285a3c36dddab1e4cde97
-        ports:
-        - containerPort: 8001
-        env:
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_AUTH_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_AUTH_PASSWORD
-        - name: DB_HOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_AUTH_HOST
-        - name: DB_PORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_PORT
-        - name: DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_AUTH_NAME
-        - name: SERVICE_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: SERVICE_API_KEY
-        - name: MASTER_KEY
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: SERVICE_API_KEY
-        - name: APP_PORT
-          value: '8001'
-        - name: DATABASE_URL
-          value: postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
-        resources:
-          requests:
-            memory: 128Mi
-            cpu: 100m
-          limits:
-            memory: 256Mi
-            cpu: 300m
+        - name: auth-service
+          image: :268be5441e406870778285a3c36dddab1e4cde97
+          ports:
+            - containerPort: 8001
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_AUTH_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_AUTH_PASSWORD
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_AUTH_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_AUTH_NAME
+            - name: SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SERVICE_API_KEY
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SERVICE_API_KEY
+            - name: APP_PORT
+              value: "8001"
+            - name: DATABASE_URL
+              value: postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 300m
 ---
 apiVersion: v1
 kind: Service
@@ -117,8 +117,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8001
+    - port: 8080
+      targetPort: 8001
   selector:
     app: auth-service
 ---
@@ -140,102 +140,102 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       initContainers:
-      - name: init-flag-db-and-tables
-        image: postgres:15-alpine
-        env:
-        - name: PGUSER
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_FLAG_USER
-        - name: PGPASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_FLAG_PASSWORD
-        - name: PGHOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_FLAG_HOST
-        - name: PGPORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_PORT
-        - name: TARGET_DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_FLAG_NAME
-        command:
-        - sh
-        - -c
-        - "psql -d postgres -c \"CREATE DATABASE ${TARGET_DB_NAME};\" 2>/dev/null\
-          \ || true\npsql -d ${TARGET_DB_NAME} -c \"\n  CREATE TABLE IF NOT EXISTS\
-          \ flags (\n      id SERIAL PRIMARY KEY,\n      name VARCHAR(100) UNIQUE\
-          \ NOT NULL, \n      description TEXT,\n      is_enabled BOOLEAN NOT NULL\
-          \ DEFAULT false,\n      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,\n\
-          \      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP\n \
-          \ );\n  CREATE OR REPLACE FUNCTION trigger_set_timestamp()\n  RETURNS TRIGGER\
-          \ AS \\$\\$\n  BEGIN\n      NEW.updated_at = NOW();\n      RETURN NEW;\n\
-          \  END;\n  \\$\\$ LANGUAGE plpgsql;\n  DROP TRIGGER IF EXISTS set_timestamp\
-          \ ON flags;\n  CREATE TRIGGER set_timestamp\n  BEFORE UPDATE ON flags\n\
-          \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
+        - name: init-flag-db-and-tables
+          image: postgres:15-alpine
+          env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_FLAG_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_FLAG_PASSWORD
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_FLAG_HOST
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_PORT
+            - name: TARGET_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_FLAG_NAME
+          command:
+            - sh
+            - -c
+            - "psql -d postgres -c \"CREATE DATABASE ${TARGET_DB_NAME};\" 2>/dev/null\
+              \ || true\npsql -d ${TARGET_DB_NAME} -c \"\n  CREATE TABLE IF NOT EXISTS\
+              \ flags (\n      id SERIAL PRIMARY KEY,\n      name VARCHAR(100) UNIQUE\
+              \ NOT NULL, \n      description TEXT,\n      is_enabled BOOLEAN NOT NULL\
+              \ DEFAULT false,\n      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,\n\
+              \      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP\n \
+              \ );\n  CREATE OR REPLACE FUNCTION trigger_set_timestamp()\n  RETURNS TRIGGER\
+              \ AS \\$\\$\n  BEGIN\n      NEW.updated_at = NOW();\n      RETURN NEW;\n\
+              \  END;\n  \\$\\$ LANGUAGE plpgsql;\n  DROP TRIGGER IF EXISTS set_timestamp\
+              \ ON flags;\n  CREATE TRIGGER set_timestamp\n  BEFORE UPDATE ON flags\n\
+              \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
       containers:
-      - name: flag-service
-        image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:c9d48c0a0dcc5bfbe236be95fa7ad5be523ad6a4
-        ports:
-        - containerPort: 8002
-        env:
-        - name: GUNICORN_CMD_ARGS
-          value: --bind=0.0.0.0:8002
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_FLAG_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_FLAG_PASSWORD
-        - name: DB_HOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_FLAG_HOST
-        - name: DB_PORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_PORT
-        - name: DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_FLAG_NAME
-        - name: PORT
-          value: '8002'
-        - name: DATABASE_URL
-          value: postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
-        - name: AUTH_SERVICE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AUTH_SERVICE_URL
-        - name: SERVICE_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: SERVICE_API_KEY
-        resources:
-          requests:
-            memory: 128Mi
-            cpu: 100m
-          limits:
-            memory: 256Mi
-            cpu: 300m
+        - name: flag-service
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:c9d48c0a0dcc5bfbe236be95fa7ad5be523ad6a4
+          ports:
+            - containerPort: 8002
+          env:
+            - name: GUNICORN_CMD_ARGS
+              value: --bind=0.0.0.0:8002
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_FLAG_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_FLAG_PASSWORD
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_FLAG_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_FLAG_NAME
+            - name: PORT
+              value: "8002"
+            - name: DATABASE_URL
+              value: postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+            - name: AUTH_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AUTH_SERVICE_URL
+            - name: SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SERVICE_API_KEY
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 300m
 ---
 apiVersion: v1
 kind: Service
@@ -245,8 +245,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8080
+    - port: 8080
+      targetPort: 8002
   selector:
     app: flag-service
 ---
@@ -268,106 +268,106 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       initContainers:
-      - name: init-targeting-db-and-tables
-        image: postgres:15-alpine
-        env:
-        - name: PGUSER
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_TARGET_USER
-        - name: PGPASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_TARGET_PASSWORD
-        - name: PGHOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_TARGET_HOST
-        - name: PGPORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_PORT
-        - name: TARGET_DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_TARGET_NAME
-        command:
-        - sh
-        - -c
-        - "psql -d postgres -c \"CREATE DATABASE ${TARGET_DB_NAME};\" 2>/dev/null\
-          \ || true\npsql -d ${TARGET_DB_NAME} -c \"\n  CREATE TABLE IF NOT EXISTS\
-          \ targeting_rules (\n      id SERIAL PRIMARY KEY,\n      flag_name VARCHAR(100)\
-          \ UNIQUE NOT NULL,\n      is_enabled BOOLEAN NOT NULL DEFAULT true,\n  \
-          \    rules JSONB NOT NULL,\n      created_at TIMESTAMP WITH TIME ZONE DEFAULT\
-          \ CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP WITH TIME ZONE DEFAULT\
-          \ CURRENT_TIMESTAMP\n  );\n\n  CREATE OR REPLACE FUNCTION trigger_set_timestamp()\n\
-          \  RETURNS TRIGGER AS \\$\\$\n  BEGIN\n      NEW.updated_at = NOW();\n \
-          \     RETURN NEW;\n  END;\n  \\$\\$ LANGUAGE plpgsql;\n\n  DROP TRIGGER\
-          \ IF EXISTS set_timestamp ON targeting_rules;\n\n  CREATE TRIGGER set_timestamp\n\
-          \  BEFORE UPDATE ON targeting_rules\n  FOR EACH ROW\n  EXECUTE PROCEDURE\
-          \ trigger_set_timestamp();\n\"\n"
+        - name: init-targeting-db-and-tables
+          image: postgres:15-alpine
+          env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_TARGET_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_TARGET_PASSWORD
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_TARGET_HOST
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_PORT
+            - name: TARGET_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_TARGET_NAME
+          command:
+            - sh
+            - -c
+            - "psql -d postgres -c \"CREATE DATABASE ${TARGET_DB_NAME};\" 2>/dev/null\
+              \ || true\npsql -d ${TARGET_DB_NAME} -c \"\n  CREATE TABLE IF NOT EXISTS\
+              \ targeting_rules (\n      id SERIAL PRIMARY KEY,\n      flag_name VARCHAR(100)\
+              \ UNIQUE NOT NULL,\n      is_enabled BOOLEAN NOT NULL DEFAULT true,\n  \
+              \    rules JSONB NOT NULL,\n      created_at TIMESTAMP WITH TIME ZONE DEFAULT\
+              \ CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP WITH TIME ZONE DEFAULT\
+              \ CURRENT_TIMESTAMP\n  );\n\n  CREATE OR REPLACE FUNCTION trigger_set_timestamp()\n\
+              \  RETURNS TRIGGER AS \\$\\$\n  BEGIN\n      NEW.updated_at = NOW();\n \
+              \     RETURN NEW;\n  END;\n  \\$\\$ LANGUAGE plpgsql;\n\n  DROP TRIGGER\
+              \ IF EXISTS set_timestamp ON targeting_rules;\n\n  CREATE TRIGGER set_timestamp\n\
+              \  BEFORE UPDATE ON targeting_rules\n  FOR EACH ROW\n  EXECUTE PROCEDURE\
+              \ trigger_set_timestamp();\n\"\n"
       containers:
-      - name: targeting-service
-        image: 297922603388.dkr.ecr.us-east-1.amazonaws.com/targeting-service:latest
-        ports:
-        - containerPort: 8003
-        env:
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_TARGET_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: DB_TARGET_PASSWORD
-        - name: DB_HOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_TARGET_HOST
-        - name: DB_PORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_PORT
-        - name: DB_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: DB_TARGET_NAME
-        - name: FLAG_SERVICE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: FLAG_SERVICE_URL
-        - name: AUTH_SERVICE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AUTH_SERVICE_URL
-        - name: SERVICE_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: SERVICE_API_KEY
-        - name: PORT
-          value: '8003'
-        - name: DATABASE_URL
-          value: postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
-        resources:
-          requests:
-            memory: 128Mi
-            cpu: 100m
-          limits:
-            memory: 256Mi
-            cpu: 300m
+        - name: targeting-service
+          image: 297922603388.dkr.ecr.us-east-1.amazonaws.com/targeting-service:latest
+          ports:
+            - containerPort: 8003
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_TARGET_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_TARGET_PASSWORD
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_TARGET_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: DB_TARGET_NAME
+            - name: FLAG_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: FLAG_SERVICE_URL
+            - name: AUTH_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AUTH_SERVICE_URL
+            - name: SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SERVICE_API_KEY
+            - name: PORT
+              value: "8003"
+            - name: DATABASE_URL
+              value: postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 300m
 ---
 apiVersion: v1
 kind: Service
@@ -377,8 +377,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8080
+    - port: 8080
+      targetPort: 8003
   selector:
     app: targeting-service
 ---
@@ -400,67 +400,67 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       containers:
-      - name: evaluation-service
-        image: 297922603388.dkr.ecr.us-east-1.amazonaws.com/evaluation-service:latest
-        ports:
-        - containerPort: 8004
-        env:
-        - name: REDIS_HOST
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: REDIS_HOST
-        - name: REDIS_PORT
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: REDIS_PORT
-        - name: REDIS_URL
-          value: redis://$(REDIS_HOST):$(REDIS_PORT)
-        - name: FLAG_SERVICE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: FLAG_SERVICE_URL
-        - name: AUTH_SERVICE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AUTH_SERVICE_URL
-        - name: TARGETING_SERVICE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: TARGETING_SERVICE_URL
-        - name: AWS_SQS_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AWS_SQS_URL
-        - name: AWS_REGION
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AWS_REGION
-        - name: PORT
-          value: '8004'
-        - name: MASTER_KEY
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: SERVICE_API_KEY
-        - name: SERVICE_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: SERVICE_API_KEY
-        resources:
-          requests:
-            memory: 128Mi
-            cpu: 100m
-          limits:
-            memory: 256Mi
-            cpu: 300m
+        - name: evaluation-service
+          image: 297922603388.dkr.ecr.us-east-1.amazonaws.com/evaluation-service:latest
+          ports:
+            - containerPort: 8004
+          env:
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: REDIS_PORT
+            - name: REDIS_URL
+              value: redis://$(REDIS_HOST):$(REDIS_PORT)
+            - name: FLAG_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: FLAG_SERVICE_URL
+            - name: AUTH_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AUTH_SERVICE_URL
+            - name: TARGETING_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: TARGETING_SERVICE_URL
+            - name: AWS_SQS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_SQS_URL
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_REGION
+            - name: PORT
+              value: "8004"
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SERVICE_API_KEY
+            - name: SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SERVICE_API_KEY
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 300m
 ---
 apiVersion: v1
 kind: Service
@@ -470,8 +470,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8004
+    - port: 8080
+      targetPort: 8004
   selector:
     app: evaluation-service
 ---
@@ -493,40 +493,40 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
       containers:
-      - name: analytics-service
-        image: 297922603388.dkr.ecr.us-east-1.amazonaws.com/analytics-service:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: AWS_REGION
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AWS_REGION
-        - name: PORT
-          value: '8080'
-        - name: AWS_SQS_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AWS_SQS_URL
-        - name: SQS_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AWS_SQS_URL
-        - name: QUEUE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: app-configmap
-              key: AWS_SQS_URL
-        resources:
-          requests:
-            memory: 128Mi
-            cpu: 100m
-          limits:
-            memory: 256Mi
-            cpu: 300m
+        - name: analytics-service
+          image: 297922603388.dkr.ecr.us-east-1.amazonaws.com/analytics-service:latest
+          ports:
+            - containerPort: 8005
+          env:
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_REGION
+            - name: PORT
+              value: "8005"
+            - name: AWS_SQS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_SQS_URL
+            - name: SQS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_SQS_URL
+            - name: QUEUE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_SQS_URL
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 300m
 ---
 apiVersion: v1
 kind: Service
@@ -536,7 +536,7 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-  - port: 8080
-    targetPort: 8080
+    - port: 8080
+      targetPort: 8005
   selector:
     app: analytics-service
