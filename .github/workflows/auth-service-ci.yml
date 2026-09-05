@@ -106,7 +106,6 @@ jobs:
           scan-ref: auth-service
           severity: CRITICAL
           exit-code: "1"
-          ignore-unfixed: true
 
   # =========================================================
   # 4 - DOCKER BUILD, SCAN & PUSH
@@ -118,6 +117,9 @@ jobs:
 
     permissions:
       contents: read
+
+    outputs:
+      ecr_url: ${{ steps.terraform-output.outputs.ecr_url }}
 
     steps:
       - name: Checkout repository
@@ -136,8 +138,6 @@ jobs:
           image-ref: togglemaster-auth-service:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
-          ignore-unfixed: true
-
       - name: Configure AWS Credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
@@ -197,109 +197,101 @@ jobs:
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
   # =========================================================
-  # 5 - DEPLOY TO EKS
+  # 5 - UPDATE GITOPS
   # =========================================================
-  deploy:
-    name: Deploy to EKS
+  gitops:
+    name: Update GitOps
     runs-on: ubuntu-latest
     needs: docker
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init -input=false
-
-      - name: Read EKS Cluster Name
-        id: terraform-output
-        working-directory: terraform
-        shell: bash
-        run: |
-          EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
-
-          if [ -z "${EKS_CLUSTER_NAME}" ]; then
-            echo "Nome do cluster EKS não encontrado."
-            exit 1
-          fi
-
-          echo "eks_cluster_name=${EKS_CLUSTER_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: latest
-
-      - name: Configure kubectl for EKS
-        env:
-          EKS_CLUSTER_NAME: ${{ steps.terraform-output.outputs.eks_cluster_name }}
-        run: |
-          aws eks update-kubeconfig \
-            --region "${AWS_REGION}" \
-            --name "${EKS_CLUSTER_NAME}"
-
-      - name: Check EKS Nodes
-        run: kubectl get nodes
-
-      - name: Apply Kubernetes Manifests
-        run: |
-          kubectl apply -f k8s/00-namespace.yaml
-          kubectl apply -f k8s/01-configmap.generated.yaml
-          kubectl apply -f k8s/02-secret.yaml
-          kubectl apply -f k8s/03-apps-deployments.yaml
-          kubectl apply -f k8s/04-ingress-e-hpa.yaml
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+          fetch-depth: 0
 
       - name: Update Auth Service Image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: togglemaster-auth-service
+          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          kubectl set image \
-            deployment/auth-service \
-            auth-service="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
-            -n desafio3
+          IMAGE="${ECR_URL}:${IMAGE_TAG}"
 
-      - name: Wait for Auth Service Rollout
+          echo "Nova imagem:"
+          echo "${IMAGE}"
+
+          python - <<'PY'
+          import os
+          import yaml
+
+          file_path = "k8s/03-apps-deployments.yaml"
+
+          image = os.environ["ECR_URL"] + ":" + os.environ["IMAGE_TAG"]
+
+          with open(file_path, "r") as file:
+              documents = list(yaml.safe_load_all(file))
+
+          found = False
+
+          for document in documents:
+              if not document:
+                  continue
+
+              if (
+                  document.get("kind") == "Deployment"
+                  and document.get("metadata", {}).get("name") == "auth-service"
+              ):
+                  containers = (
+                      document
+                      .get("spec", {})
+                      .get("template", {})
+                      .get("spec", {})
+                      .get("containers", [])
+                  )
+
+                  for container in containers:
+                      if container.get("name") == "auth-service":
+                          container["image"] = image
+                          found = True
+
+          if not found:
+              raise Exception(
+                  "Deployment/container auth-service não encontrado."
+              )
+
+          with open(file_path, "w") as file:
+              yaml.safe_dump_all(
+                  documents,
+                  file,
+                  sort_keys=False
+              )
+
+          print(f"Imagem atualizada para: {image}")
+          PY
+
+      - name: Show GitOps Changes
+        run: git diff
+
+      - name: Commit GitOps Change
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          kubectl rollout status \
-            deployment/auth-service \
-            -n desafio3 \
-            --timeout=300s
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Show Deployment Status
-        run: |
-          echo "===== NODES ====="
-          kubectl get nodes
+          git add k8s/03-apps-deployments.yaml
 
-          echo "===== PODS ====="
-          kubectl get pods -n desafio3 -o wide
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração necessária."
+            exit 0
+          fi
 
-          echo "===== SERVICES ====="
-          kubectl get svc -n desafio3
+          git commit \
+            -m "chore(gitops): update auth-service image to ${IMAGE_TAG}"
 
-          echo "===== DEPLOYMENTS ====="
-          kubectl get deployments -n desafio3
+          git push
