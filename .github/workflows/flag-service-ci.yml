@@ -238,49 +238,31 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import re
           from pathlib import Path
 
           file_path = Path("k8s/03-apps-deployments.yaml")
 
-          image = (
-              os.environ["ECR_URL"]
-              + ":"
-              + os.environ["IMAGE_TAG"]
+          image = f"{os.environ['ECR_URL']}:{os.environ['IMAGE_TAG']}"
+
+          content = file_path.read_text()
+
+          pattern = r'^(\s*image:\s*).*(?:togglemaster-)?flag-service:[^\s]+'
+
+          new_content, count = re.subn(
+            pattern,
+            lambda match: f"{match.group(1)}{image}",
+            content,
+            count=1,
+            flags=re.MULTILINE
           )
 
-          lines = file_path.read_text().splitlines()
+          if count == 0:
+            raise Exception(
+              "Imagem do flag-service não encontrada em k8s/03-apps-deployments.yaml"
+            )
 
-          inside_flag_deployment = False
-          inside_flag_container = False
-          updated = False
-
-          for i, line in enumerate(lines):
-              stripped = line.strip()
-
-              if stripped == "name: flag-service":
-                  if not inside_flag_deployment:
-                      inside_flag_deployment = True
-                  else:
-                      inside_flag_container = True
-
-              if (
-                  inside_flag_deployment
-                  and inside_flag_container
-                  and stripped.startswith("image:")
-              ):
-                  indentation = line[:len(line) - len(line.lstrip())]
-                  lines[i] = f"{indentation}image: {image}"
-                  updated = True
-                  break
-
-          if not updated:
-              raise Exception(
-                  "Imagem do container flag-service não encontrada."
-              )
-
-          file_path.write_text(
-              "\n".join(lines) + "\n"
-          )
+          file_path.write_text(new_content)
 
           print(f"Imagem atualizada para: {image}")
           PY
