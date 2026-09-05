@@ -108,7 +108,7 @@ jobs:
           exit-code: "1"
 
   # =========================================================
-  # 4 - DOCKER BUILD, SCAN & PUSH
+  # 4 - DOCKER BUILD, SCAN & PUSHh
   # =========================================================
   docker:
     name: Docker Build, Scan & Push
