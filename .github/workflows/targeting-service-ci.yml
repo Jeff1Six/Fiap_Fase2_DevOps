@@ -2,17 +2,18 @@ name: Targeting Service CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "targeting-service/**"
-      - "k8s/**"
       - "terraform/**"
       - ".github/workflows/targeting-service-ci.yml"
+
   pull_request:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "targeting-service/**"
-      - "k8s/**"
       - "terraform/**"
       - ".github/workflows/targeting-service-ci.yml"
 
@@ -20,27 +21,36 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
+  # =========================================================
+  # 1 - BUILD & UNIT TEST
+  # =========================================================
   build-test:
     name: Build & Unit Test
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: targeting-service
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: targeting-service/requirements.txt
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
+
       - name: Validate Python syntax
         run: python -m compileall .
+
       - name: Unit Tests
         shell: bash
         run: |
@@ -50,47 +60,66 @@ jobs:
             echo "No unit tests found - skipping tests."
           fi
 
+  # =========================================================
+  # 2 - LINTER / STATIC ANALYSIS
+  # =========================================================
   lint:
     name: Linter & Static Analysis
     runs-on: ubuntu-latest
     needs: build-test
+
     defaults:
       run:
         working-directory: targeting-service
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install Flake8
         run: pip install flake8
+
       - name: Run Flake8
         run: |
-          # Bloqueia erros críticos; o código legado ainda possui pendências
-          # cosméticas que serão tratadas separadamente.
           flake8 . \
             --count \
             --select=E9,F63,F7,F82 \
             --show-source \
             --statistics
 
+  # =========================================================
+  # 3 - SECURITY SCAN
+  # =========================================================
   security:
     name: Security Scan - SAST & SCA
     runs-on: ubuntu-latest
     needs: lint
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install Bandit
         run: pip install bandit
+
       - name: Bandit SAST
-        run: bandit -r targeting-service -x targeting-service/tests -lll -iii
+        run: |
+          bandit \
+            -r targeting-service \
+            -x targeting-service/tests \
+            -lll \
+            -iii
+
       - name: Trivy SCA
         uses: aquasecurity/trivy-action@master
         with:
@@ -98,27 +127,43 @@ jobs:
           scan-ref: targeting-service
           severity: CRITICAL
           exit-code: "1"
-          ignore-unfixed: true
 
+  # =========================================================
+  # 4 - DOCKER BUILD, SCAN & PUSH
+  # =========================================================
   docker:
     name: Docker Build, Scan & Push
     runs-on: ubuntu-latest
     needs: security
+
     permissions:
       contents: read
+
+    outputs:
+      ecr_url: ${{ steps.terraform-output.outputs.ecr_url }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Docker Build
         working-directory: targeting-service
-        run: docker build --tag togglemaster-targeting-service:${{ github.sha }} .
+        run: |
+          docker build \
+            --tag togglemaster-targeting-service:${{ github.sha }} \
+            .
+
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: togglemaster-targeting-service:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
-          ignore-unfixed: true
+
+      # -------------------------------------------------------
+      # SOMENTE PARA PUSH NA MAIN
+      # -------------------------------------------------------
+
       - name: Configure AWS Credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
@@ -126,7 +171,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -139,102 +184,264 @@ jobs:
         working-directory: terraform
         run: terraform init -input=false
 
-      - name: Read ECR URL
+      - name: Read Targeting ECR URL
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: terraform-output
         working-directory: terraform
         shell: bash
         run: |
           ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."targeting"')
+
           if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
-            echo "ECR URL for targeting-service was not found."
+            echo "ERRO: URL do targeting-service não encontrada nos outputs."
             exit 1
           fi
+
+          echo "ECR URL encontrada: ${ECR_URL}"
           echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Targeting ECR URL
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+        shell: bash
+        run: |
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            exit 1
+          fi
+
+          echo "ECR utilizado:"
+          echo "${ECR_URL}"
 
       - name: Login to Amazon ECR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Tag and Push Docker Image
+      - name: Tag Docker Image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
-          docker tag togglemaster-targeting-service:${IMAGE_TAG} "${ECR_URL}:${IMAGE_TAG}"
+          docker tag \
+            togglemaster-targeting-service:${IMAGE_TAG} \
+            "${ECR_URL}:${IMAGE_TAG}"
+
+      - name: Push Docker Image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
-  deploy:
-    name: Deploy to EKS
+  # =========================================================
+  # 5 - UPDATE GITOPS
+  # =========================================================
+  gitops:
+    name: Update GitOps
     runs-on: ubuntu-latest
     needs: docker
+
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    concurrency:
+      group: togglemaster-gitops-main
+      cancel-in-progress: false
+
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          fetch-depth: 0
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+      # -------------------------------------------------------
+      # VALIDA O OUTPUT RECEBIDO DO JOB DOCKER
+      # -------------------------------------------------------
 
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init -input=false
-
-      - name: Read Terraform Outputs
-        id: terraform-output
-        working-directory: terraform
+      - name: Show Docker Output
+        env:
+          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
         shell: bash
         run: |
-          EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
-          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."targeting"')
-          if [ -z "${EKS_CLUSTER_NAME}" ] || [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
-            echo "Required Terraform outputs were not found."
+          echo "ECR recebido do job Docker:"
+          echo "${ECR_URL}"
+
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL recebido do job Docker está vazio."
             exit 1
           fi
-          echo "eks_cluster_name=${EKS_CLUSTER_NAME}" >> "$GITHUB_OUTPUT"
-          echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: latest
+      # -------------------------------------------------------
+      # ALTERA SOMENTE TARGETING-SERVICE
+      # -------------------------------------------------------
 
-      - name: Configure kubectl for EKS
+      - name: Update Targeting Service Image
         env:
-          EKS_CLUSTER_NAME: ${{ steps.terraform-output.outputs.eks_cluster_name }}
-        run: aws eks update-kubeconfig --region "${AWS_REGION}" --name "${EKS_CLUSTER_NAME}"
-
-      - name: Apply Kubernetes Manifests
-        run: |
-          kubectl apply -f k8s/00-namespace.yaml
-          kubectl apply -f k8s/01-configmap.generated.yaml
-          kubectl apply -f k8s/02-secret.yaml
-          kubectl apply -f k8s/03-apps-deployments.yaml
-          kubectl apply -f k8s/04-ingress-e-hpa.yaml
-
-      - name: Update targeting-service Image
-        env:
-          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
-          kubectl set image deployment/targeting-service targeting-service="${ECR_URL}:${IMAGE_TAG}" -n desafio3
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            echo "O manifesto GitOps não será alterado."
+            exit 1
+          fi
 
-      - name: Wait for Rollout
-        run: kubectl rollout status deployment/targeting-service -n desafio3 --timeout=300s
+          IMAGE="${ECR_URL}:${IMAGE_TAG}"
 
-      - name: Show Deployment Status
-        run: kubectl get pods,services,deployments -n desafio3 -o wide
+          echo "Nova imagem:"
+          echo "${IMAGE}"
+
+          python - <<'PY'
+          import os
+          import re
+
+          file_path = "k8s/03-apps-deployments.yaml"
+
+          ecr_url = os.environ["ECR_URL"]
+          image_tag = os.environ["IMAGE_TAG"]
+
+          if not ecr_url:
+              raise Exception("ECR_URL está vazio.")
+
+          image = f"{ecr_url}:{image_tag}"
+
+          with open(file_path, "r", encoding="utf-8") as file:
+              content = file.read()
+
+          documents = re.split(r"(?m)^---\s*$", content)
+
+          found = False
+
+          for index, document in enumerate(documents):
+              if not re.search(
+                  r"(?m)^\s*kind:\s*Deployment\s*$",
+                  document
+              ):
+                  continue
+
+              if not re.search(
+                  r"(?m)^\s*name:\s*targeting-service\s*$",
+                  document
+              ):
+                  continue
+
+              pattern = (
+                  r"(?ms)"
+                  r"(^\s*-\s*name:\s*targeting-service\s*$"
+                  r".*?"
+                  r"^\s*image:\s*)"
+                  r"[^\r\n]+"
+              )
+
+              updated_document, count = re.subn(
+                  pattern,
+                  lambda match: match.group(1) + image,
+                  document,
+                  count=1
+              )
+
+              if count != 1:
+                  raise Exception(
+                      "Imagem do container targeting-service não encontrada."
+                  )
+
+              documents[index] = updated_document
+              found = True
+              break
+
+          if not found:
+              raise Exception(
+                  "Deployment targeting-service não encontrado."
+              )
+
+          new_content = "\n---\n".join(documents)
+
+          with open(file_path, "w", encoding="utf-8") as file:
+              file.write(new_content)
+
+          print(f"Imagem atualizada para: {image}")
+          PY
+
+      # -------------------------------------------------------
+      # MOSTRA A ALTERAÇÃO
+      # -------------------------------------------------------
+
+      - name: Show GitOps Changes
+        run: |
+          echo "===== ALTERAÇÕES GITOPS ====="
+          git diff -- k8s/03-apps-deployments.yaml
+
+      # -------------------------------------------------------
+      # GARANTE QUE SÓ A IMAGEM DO TARGETING FOI ALTERADA
+      # -------------------------------------------------------
+
+      - name: Validate GitOps Change
+        shell: bash
+        run: |
+          CHANGED_FILES=$(git diff --name-only)
+
+          if [ "${CHANGED_FILES}" != "k8s/03-apps-deployments.yaml" ]; then
+            echo "ERRO: Arquivos inesperados foram modificados:"
+            echo "${CHANGED_FILES}"
+            exit 1
+          fi
+
+          IMAGE_CHANGES=$(git diff --unified=0 -- k8s/03-apps-deployments.yaml | \
+            grep -E '^[+-][[:space:]]*image:' || true)
+
+          echo "Alterações de imagem:"
+          echo "${IMAGE_CHANGES}"
+
+          REMOVED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^-' || true)
+          ADDED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^+' || true)
+
+          if [ "${REMOVED_COUNT}" -ne 1 ] || [ "${ADDED_COUNT}" -ne 1 ]; then
+            echo "ERRO: O workflow deveria alterar somente uma imagem."
+            exit 1
+          fi
+
+          if ! echo "${IMAGE_CHANGES}" | grep '^+' | grep -q 'togglemaster-targeting-service:'; then
+            echo "ERRO: A nova imagem não pertence ao targeting-service."
+            exit 1
+          fi
+
+          echo "Alteração GitOps validada com sucesso."
+
+      # -------------------------------------------------------
+      # COMMIT + REBASE + PUSH
+      # -------------------------------------------------------
+
+      - name: Commit GitOps Change
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add k8s/03-apps-deployments.yaml
+
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração necessária."
+            exit 0
+          fi
+
+          git commit \
+            -m "chore(gitops): update targeting-service image to ${IMAGE_TAG}"
+
+          echo "Atualizando branch local..."
+
+          git fetch origin main
+          git rebase origin/main
+
+          echo "Enviando alteração GitOps..."
+
+          git push origin HEAD:main
