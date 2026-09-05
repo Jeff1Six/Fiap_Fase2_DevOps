@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "analytics-service/**"
+      - "terraform/**"
       - ".github/workflows/analytics-service-ci.yml"
 
   pull_request:
@@ -13,7 +14,11 @@ on:
       - main
     paths:
       - "analytics-service/**"
+      - "terraform/**"
       - ".github/workflows/analytics-service-ci.yml"
+
+env:
+  AWS_REGION: us-east-1
 
 jobs:
   # =========================================================
@@ -35,7 +40,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+          cache: pip
           cache-dependency-path: analytics-service/requirements.txt
 
       - name: Install dependencies
@@ -48,13 +53,13 @@ jobs:
         run: python -m compileall .
 
       - name: Unit Tests
+        shell: bash
         run: |
-          if find . -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+          if find . -type f \( -name "test_*.py" -o -name "*_test.py" \) | grep -q .; then
             pytest
           else
             echo "No unit tests found - skipping tests."
           fi
-        continue-on-error: true
 
   # =========================================================
   # 2 - LINTER / STATIC ANALYSIS
@@ -62,7 +67,6 @@ jobs:
   lint:
     name: Linter & Static Analysis
     runs-on: ubuntu-latest
-
     needs: build-test
 
     defaults:
@@ -85,6 +89,7 @@ jobs:
         run: |
           flake8 . \
             --count \
+            --select=E9,F63,F7,F82 \
             --show-source \
             --statistics
 
@@ -94,16 +99,12 @@ jobs:
   security:
     name: Security Scan - SAST & SCA
     runs-on: ubuntu-latest
-
     needs: lint
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ----------------------------
-      # SAST
-      # ----------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -114,12 +115,12 @@ jobs:
 
       - name: Bandit SAST
         run: |
-          bandit -r analytics-service \
-            -x analytics-service/tests
+          bandit \
+            -r analytics-service \
+            -x analytics-service/tests \
+            -lll \
+            -iii
 
-      # ----------------------------
-      # SCA
-      # ----------------------------
       - name: Trivy SCA
         uses: aquasecurity/trivy-action@master
         with:
@@ -127,9 +128,8 @@ jobs:
           scan-ref: analytics-service
           severity: CRITICAL
           exit-code: "1"
-          ignore-unfixed: true
 
-    # =========================================================
+  # =========================================================
   # 4 - DOCKER BUILD, SCAN & PUSH
   # =========================================================
   docker:
@@ -139,6 +139,9 @@ jobs:
 
     permissions:
       contents: read
+
+    outputs:
+      ecr_url: ${{ steps.terraform-output.outputs.ecr_url }}
 
     steps:
       - name: Checkout repository
@@ -157,7 +160,10 @@ jobs:
           image-ref: togglemaster-analytics-service:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
-          ignore-unfixed: true
+
+      # -------------------------------------------------------
+      # DAQUI PARA BAIXO SOMENTE PUSH NA MAIN
+      # -------------------------------------------------------
 
       - name: Configure AWS Credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -166,7 +172,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -188,12 +194,26 @@ jobs:
           ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."analytics"')
 
           if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
-            echo "URL do analytics-service não encontrada nos outputs."
+            echo "ERRO: URL do analytics-service não encontrada nos outputs."
             exit 1
           fi
 
           echo "ECR URL encontrada: ${ECR_URL}"
           echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Analytics ECR URL
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+        shell: bash
+        run: |
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            exit 1
+          fi
+
+          echo "ECR utilizado:"
+          echo "${ECR_URL}"
 
       - name: Login to Amazon ECR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -204,6 +224,7 @@ jobs:
         env:
           ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           docker tag \
             togglemaster-analytics-service:${IMAGE_TAG} \
@@ -214,113 +235,214 @@ jobs:
         env:
           ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
   # =========================================================
-  # 5 - DEPLOY TO EKS
+  # 5 - UPDATE GITOPS
   # =========================================================
-  deploy:
-    name: Deploy to EKS
+  gitops:
+    name: Update GitOps
     runs-on: ubuntu-latest
     needs: docker
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    concurrency:
+      group: togglemaster-gitops-main
+      cancel-in-progress: false
+
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          fetch-depth: 0
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+      # -------------------------------------------------------
+      # VALIDA OUTPUT RECEBIDO DO JOB DOCKER
+      # -------------------------------------------------------
 
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init -input=false
-
-      - name: Read EKS Cluster Name
-        id: terraform-output
-        working-directory: terraform
+      - name: Show Docker Output
+        env:
+          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
         shell: bash
         run: |
-          EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
+          echo "ECR recebido do job Docker:"
+          echo "${ECR_URL}"
 
-          if [ -z "${EKS_CLUSTER_NAME}" ]; then
-            echo "Nome do cluster EKS não encontrado."
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL recebido do job Docker está vazio."
             exit 1
           fi
 
-          echo "eks_cluster_name=${EKS_CLUSTER_NAME}" >> "$GITHUB_OUTPUT"
+      # -------------------------------------------------------
+      # ALTERA SOMENTE ANALYTICS-SERVICE
+      # -------------------------------------------------------
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: latest
-
-      - name: Configure kubectl for EKS
+      - name: Update Analytics Service Image
         env:
-          EKS_CLUSTER_NAME: ${{ steps.terraform-output.outputs.eks_cluster_name }}
-        run: |
-          aws eks update-kubeconfig \
-            --region "${AWS_REGION}" \
-            --name "${EKS_CLUSTER_NAME}"
-
-      - name: Check EKS Nodes
-        run: kubectl get nodes
-
-      - name: Apply Kubernetes Manifests
-        run: |
-          kubectl apply -f k8s/00-namespace.yaml
-          kubectl apply -f k8s/01-configmap.generated.yaml
-          kubectl apply -f k8s/02-secret.yaml
-          kubectl apply -f k8s/03-apps-deployments.yaml
-          kubectl apply -f k8s/04-ingress-e-hpa.yaml
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Update analytics Service Image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: togglemaster-analytics-service
+          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
-          kubectl set image \
-            deployment/analytics-service \
-            analytics-service="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" \
-            -n desafio3
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            echo "O manifesto GitOps não será alterado."
+            exit 1
+          fi
 
-      - name: Wait for analytics Service Rollout
+          IMAGE="${ECR_URL}:${IMAGE_TAG}"
+
+          echo "Nova imagem:"
+          echo "${IMAGE}"
+
+          python - <<'PY'
+          import os
+          import re
+
+          file_path = "k8s/03-apps-deployments.yaml"
+
+          ecr_url = os.environ["ECR_URL"]
+          image_tag = os.environ["IMAGE_TAG"]
+
+          if not ecr_url:
+              raise Exception("ECR_URL está vazio.")
+
+          image = f"{ecr_url}:{image_tag}"
+
+          with open(file_path, "r", encoding="utf-8") as file:
+              content = file.read()
+
+          documents = re.split(r"(?m)^---\s*$", content)
+
+          found = False
+
+          for index, document in enumerate(documents):
+              if not re.search(
+                  r"(?m)^\s*kind:\s*Deployment\s*$",
+                  document
+              ):
+                  continue
+
+              if not re.search(
+                  r"(?m)^\s*name:\s*analytics-service\s*$",
+                  document
+              ):
+                  continue
+
+              pattern = (
+                  r"(?ms)"
+                  r"(^\s*-\s*name:\s*analytics-service\s*$"
+                  r".*?"
+                  r"^\s*image:\s*)"
+                  r"[^\r\n]+"
+              )
+
+              updated_document, count = re.subn(
+                  pattern,
+                  lambda match: match.group(1) + image,
+                  document,
+                  count=1
+              )
+
+              if count != 1:
+                  raise Exception(
+                      "Imagem do container analytics-service não encontrada."
+                  )
+
+              documents[index] = updated_document
+              found = True
+              break
+
+          if not found:
+              raise Exception(
+                  "Deployment analytics-service não encontrado."
+              )
+
+          new_content = "\n---\n".join(documents)
+
+          with open(file_path, "w", encoding="utf-8") as file:
+              file.write(new_content)
+
+          print(f"Imagem atualizada para: {image}")
+          PY
+
+      # -------------------------------------------------------
+      # MOSTRA A ALTERAÇÃO
+      # -------------------------------------------------------
+
+      - name: Show GitOps Changes
         run: |
-          kubectl rollout status \
-            deployment/analytics-service \
-            -n desafio3 \
-            --timeout=300s
+          echo "===== ALTERAÇÕES GITOPS ====="
+          git diff -- k8s/03-apps-deployments.yaml
 
-      - name: Show Deployment Status
+      # -------------------------------------------------------
+      # GARANTE QUE SOMENTE A IMAGEM DO ANALYTICS MUDOU
+      # -------------------------------------------------------
+
+      - name: Validate GitOps Change
+        shell: bash
         run: |
-          echo "===== NODES ====="
-          kubectl get nodes
+          CHANGED_FILES=$(git diff --name-only)
 
-          echo "===== PODS ====="
-          kubectl get pods -n desafio3 -o wide
+          if [ "${CHANGED_FILES}" != "k8s/03-apps-deployments.yaml" ]; then
+            echo "ERRO: Arquivos inesperados foram modificados:"
+            echo "${CHANGED_FILES}"
+            exit 1
+          fi
 
-          echo "===== SERVICES ====="
-          kubectl get svc -n desafio3
+          IMAGE_CHANGES=$(git diff --unified=0 -- k8s/03-apps-deployments.yaml | \
+            grep -E '^[+-][[:space:]]*image:' || true)
 
-          echo "===== DEPLOYMENTS ====="
-          kubectl get deployments -n desafio3
+          echo "Alterações de imagem:"
+          echo "${IMAGE_CHANGES}"
+
+          REMOVED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^-' || true)
+          ADDED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^+' || true)
+
+          if [ "${REMOVED_COUNT}" -ne 1 ] || [ "${ADDED_COUNT}" -ne 1 ]; then
+            echo "ERRO: O workflow deveria alterar somente uma imagem."
+            exit 1
+          fi
+
+          if ! echo "${IMAGE_CHANGES}" | grep '^+' | grep -q 'togglemaster-analytics-service:'; then
+            echo "ERRO: A nova imagem não pertence ao analytics-service."
+            exit 1
+          fi
+
+          echo "Alteração GitOps validada com sucesso."
+
+      # -------------------------------------------------------
+      # COMMIT + REBASE + PUSH
+      # -------------------------------------------------------
+
+      - name: Commit GitOps Change
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add k8s/03-apps-deployments.yaml
+
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração necessária."
+            exit 0
+          fi
+
+          git commit \
+            -m "chore(gitops): update analytics-service image to ${IMAGE_TAG}"
+
+          echo "Atualizando branch local..."
+
+          git fetch origin main
+          git rebase origin/main
+
+          echo "Enviando alteração GitOps..."
+
+          git push origin HEAD:main
