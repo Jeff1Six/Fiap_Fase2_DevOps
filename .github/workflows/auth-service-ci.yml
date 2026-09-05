@@ -108,7 +108,7 @@ jobs:
           exit-code: "1"
 
   # =========================================================
-  # 4 - DOCKER BUILD, SCAN & PUSHh
+  # 4 - DOCKER BUILD, SCAN & PUSH
   # =========================================================
   docker:
     name: Docker Build, Scan & Push
@@ -138,6 +138,11 @@ jobs:
           image-ref: togglemaster-auth-service:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
+
+      # -------------------------------------------------------
+      # DAQUI PARA BAIXO SOMENTE PUSH NA MAIN
+      # -------------------------------------------------------
+
       - name: Configure AWS Credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
@@ -145,7 +150,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -167,12 +172,27 @@ jobs:
           ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."auth"')
 
           if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
-            echo "URL do auth-service não encontrada nos outputs."
+            echo "ERRO: URL do auth-service não encontrada nos outputs."
             exit 1
           fi
 
           echo "ECR URL encontrada: ${ECR_URL}"
+
           echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Auth ECR URL
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
+        shell: bash
+        run: |
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            exit 1
+          fi
+
+          echo "ECR utilizado:"
+          echo "${ECR_URL}"
 
       - name: Login to Amazon ECR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -183,6 +203,7 @@ jobs:
         env:
           ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           docker tag \
             togglemaster-auth-service:${IMAGE_TAG} \
@@ -193,11 +214,12 @@ jobs:
         env:
           ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
   # =========================================================
-  # 5 - UPDATE GITOPSs
+  # 5 - UPDATE GITOPS
   # =========================================================
   gitops:
     name: Update GitOps
@@ -205,6 +227,10 @@ jobs:
     needs: docker
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    concurrency:
+      group: togglemaster-gitops-main
+      cancel-in-progress: false
 
     permissions:
       contents: write
@@ -215,11 +241,46 @@ jobs:
         with:
           fetch-depth: 0
 
+      # -------------------------------------------------------
+      # VALIDA O OUTPUT RECEBIDO DO JOB DOCKER
+      # -------------------------------------------------------
+
+      - name: Show Docker Output
+        env:
+          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
+        shell: bash
+        run: |
+          echo "ECR recebido do job Docker:"
+          echo "${ECR_URL}"
+
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL recebido do job Docker está vazio."
+            exit 1
+          fi
+
+      # -------------------------------------------------------
+      # INSTALA PYYAML PARA ALTERAR O MANIFESTO
+      # -------------------------------------------------------
+
+      - name: Install PyYAML
+        run: python -m pip install pyyaml
+
+      # -------------------------------------------------------
+      # ATUALIZA SOMENTE A IMAGEM DO AUTH-SERVICE
+      # -------------------------------------------------------
+
       - name: Update Auth Service Image
         env:
           ECR_URL: ${{ needs.docker.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            echo "O manifesto GitOps não será alterado."
+            exit 1
+          fi
+
           IMAGE="${ECR_URL}:${IMAGE_TAG}"
 
           echo "Nova imagem:"
@@ -231,9 +292,15 @@ jobs:
 
           file_path = "k8s/03-apps-deployments.yaml"
 
-          image = os.environ["ECR_URL"] + ":" + os.environ["IMAGE_TAG"]
+          ecr_url = os.environ["ECR_URL"]
+          image_tag = os.environ["IMAGE_TAG"]
 
-          with open(file_path, "r") as file:
+          if not ecr_url:
+              raise Exception("ECR_URL está vazio.")
+
+          image = f"{ecr_url}:{image_tag}"
+
+          with open(file_path, "r", encoding="utf-8") as file:
               documents = list(yaml.safe_load_all(file))
 
           found = False
@@ -264,7 +331,7 @@ jobs:
                   "Deployment/container auth-service não encontrado."
               )
 
-          with open(file_path, "w") as file:
+          with open(file_path, "w", encoding="utf-8") as file:
               yaml.safe_dump_all(
                   documents,
                   file,
@@ -274,8 +341,18 @@ jobs:
           print(f"Imagem atualizada para: {image}")
           PY
 
+      # -------------------------------------------------------
+      # MOSTRA A ALTERAÇÃO QUE SERÁ COMMITADA
+      # -------------------------------------------------------
+
       - name: Show GitOps Changes
-        run: git diff
+        run: |
+          echo "===== ALTERAÇÕES GITOPS ====="
+          git diff -- k8s/03-apps-deployments.yaml
+
+      # -------------------------------------------------------
+      # COMMIT + REBASE + PUSH
+      # -------------------------------------------------------
 
       - name: Commit GitOps Change
         env:
@@ -293,7 +370,7 @@ jobs:
           fi
 
           git commit \
-          -m "chore(gitops): update auth-service image to ${IMAGE_TAG}"
+            -m "chore(gitops): update auth-service image to ${IMAGE_TAG}"
 
           echo "Atualizando branch local..."
 
