@@ -22,26 +22,32 @@ Write-Host "========================================="
 
 # Atualiza arquivo usado apenas para disparar os workflows
 $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-
-Set-Content `
-    -Path "terraform/deploy-trigger.txt" `
-    -Value "Último deploy: $Timestamp"
+Set-Content -Path "terraform/deploy-trigger.txt" -Value "Último deploy: $Timestamp"
 
 Write-Host ""
 Write-Host "========================================="
 Write-Host "3 - Preparando commit"
 Write-Host "========================================="
 
+git config user.name "Terraform Automation"
+git config user.email "terraform@bot.local"
+
 git add terraform/deploy-trigger.txt
 
-# Adiciona também o ConfigMap gerado pelo Terraform, caso tenha mudado
 if (Test-Path "k8s/01-configmap.generated.yaml") {
     git add k8s/01-configmap.generated.yaml
 }
 
 git status --short
 
-git commit -m "Deploy Microsservicos"
+# Verifica se realmente há alterações para commitar
+git diff --cached --quiet
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Nenhuma alteração detectada para commitar. Processo finalizado." -ForegroundColor Yellow
+    exit 0
+}
+
+git commit -m "chore: trigger microservices deployment [skip ci]"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Falha ao criar commit."
@@ -62,5 +68,5 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "========================================="
-Write-Host "Deploy disparado com sucesso"
-Write-Host "========================================="
+Write-Host "Deploy disparado com sucesso!"
+Write-Host "=========================================" -ForegroundColor Green

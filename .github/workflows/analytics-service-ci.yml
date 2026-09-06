@@ -438,11 +438,15 @@ jobs:
           git commit \
             -m "chore(gitops): update analytics-service image to ${IMAGE_TAG}"
 
-          echo "Atualizando branch local..."
+          echo "Sincronizando com a branch remota..."
+          git pull origin main --rebase || true
 
-          git fetch origin main
-          git rebase origin/main
+          # Se houver conflito por causa da mesma tag de imagem, aceita a versão gerada agora
+          if [ -f .git/CHERRY_PICK_HEAD ]; then
+            git checkout --theirs k8s/03-apps-deployments.yaml
+            git add k8s/03-apps-deployments.yaml
+            git rebase --continue || true
+          fi
 
           echo "Enviando alteração GitOps..."
-
           git push origin HEAD:main

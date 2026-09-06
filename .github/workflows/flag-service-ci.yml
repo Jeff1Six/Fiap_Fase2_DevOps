@@ -270,7 +270,7 @@ jobs:
       - name: Show GitOps Changes
         run: git diff -- k8s/03-apps-deployments.yaml
 
-      - name: Commit GitOps Change
+      - name: Commit and Push GitOps Change
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
@@ -284,7 +284,16 @@ jobs:
             exit 0
           fi
 
-          git commit \
-            -m "chore(gitops): update flag-service image to ${IMAGE_TAG}"
+          git commit -m "chore(gitops): update flag-service image to ${IMAGE_TAG}"
 
-          git push
+          echo "Sincronizando com a branch remota..."
+          git pull origin main --rebase || true
+
+          if [ -f .git/CHERRY_PICK_HEAD ]; then
+            git checkout --theirs k8s/03-apps-deployments.yaml
+            git add k8s/03-apps-deployments.yaml
+            git rebase --continue || true
+          fi
+
+          echo "Enviando alteração GitOps..."
+          git push origin HEAD:main
