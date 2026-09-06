@@ -47,7 +47,7 @@ if ($LASTEXITCODE -eq 0) {
     exit 0
 }
 
-git commit -m "chore: trigger microservices deployment [skip ci]"
+git commit -m "chore: trigger microservices deployment"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Falha ao criar commit."
