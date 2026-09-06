@@ -111,6 +111,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -125,6 +126,7 @@ spec:
       targetPort: 8001
   selector:
     app: auth-service
+
 
 
 
@@ -192,7 +194,7 @@ spec:
               \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
       containers:
         - name: flag-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:da5929adac89eeb4cdc7203e730c7d25decd114d
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:59c4b6b080b7c553e193ba269c9af356a4d5b008
           ports:
             - containerPort: 8002
           env:
@@ -247,6 +249,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -261,6 +264,7 @@ spec:
       targetPort: 8002
   selector:
     app: flag-service
+
 
 
 
@@ -329,7 +333,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:a2e4c03f1c34489dc1a664ee557cbdef16cee3d5
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:59c4b6b080b7c553e193ba269c9af356a4d5b008
           ports:
             - containerPort: 8003
           env:
@@ -387,6 +391,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -401,6 +406,7 @@ spec:
       targetPort: 8003
   selector:
     app: targeting-service
+
 
 
 
@@ -425,7 +431,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:d1b85ba98356ecfc388513be3614cd2ff6be7da0
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:59c4b6b080b7c553e193ba269c9af356a4d5b008
           ports:
             - containerPort: 8004
           env:
@@ -488,6 +494,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -502,6 +509,7 @@ spec:
       targetPort: 8004
   selector:
     app: evaluation-service
+
 
 
 
@@ -526,7 +534,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:387f4344976daf5e033650aa9883a2bb1ca6df1b
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:59c4b6b080b7c553e193ba269c9af356a4d5b008
           ports:
             - containerPort: 8005
           env:
@@ -559,6 +567,7 @@ spec:
             limits:
               memory: 256Mi
               cpu: 300m
+
 
 
 
