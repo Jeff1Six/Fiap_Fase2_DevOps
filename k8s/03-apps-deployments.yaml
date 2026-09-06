@@ -112,6 +112,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -126,6 +127,7 @@ spec:
       targetPort: 8001
   selector:
     app: auth-service
+
 
 
 
@@ -250,6 +252,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -264,6 +267,7 @@ spec:
       targetPort: 8002
   selector:
     app: flag-service
+
 
 
 
@@ -392,6 +396,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -406,6 +411,7 @@ spec:
       targetPort: 8003
   selector:
     app: targeting-service
+
 
 
 
@@ -495,6 +501,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -509,6 +516,7 @@ spec:
       targetPort: 8004
   selector:
     app: evaluation-service
+
 
 
 
@@ -534,7 +542,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:59c4b6b080b7c553e193ba269c9af356a4d5b008
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:04e806f879c67e921b69f8a0d5a31c3666e6c93b
           ports:
             - containerPort: 8005
           env:
@@ -567,6 +575,7 @@ spec:
             limits:
               memory: 256Mi
               cpu: 300m
+
 
 
 
