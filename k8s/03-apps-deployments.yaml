@@ -113,6 +113,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -127,6 +128,7 @@ spec:
       targetPort: 8001
   selector:
     app: auth-service
+
 
 
 
@@ -253,6 +255,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -267,6 +270,7 @@ spec:
       targetPort: 8002
   selector:
     app: flag-service
+
 
 
 
@@ -337,7 +341,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:04e806f879c67e921b69f8a0d5a31c3666e6c93b
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:42d74493cb800e990f05023078f6f51227ee078d
           ports:
             - containerPort: 8003
           env:
@@ -397,6 +401,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -411,6 +416,7 @@ spec:
       targetPort: 8003
   selector:
     app: targeting-service
+
 
 
 
@@ -502,6 +508,7 @@ spec:
 
 
 
+
 ---
 
 apiVersion: v1
@@ -516,6 +523,7 @@ spec:
       targetPort: 8004
   selector:
     app: evaluation-service
+
 
 
 
@@ -575,6 +583,7 @@ spec:
             limits:
               memory: 256Mi
               cpu: 300m
+
 
 
 
