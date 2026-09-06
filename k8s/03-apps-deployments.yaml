@@ -437,7 +437,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:59c4b6b080b7c553e193ba269c9af356a4d5b008
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:04e806f879c67e921b69f8a0d5a31c3666e6c93b
           ports:
             - containerPort: 8004
           env:
