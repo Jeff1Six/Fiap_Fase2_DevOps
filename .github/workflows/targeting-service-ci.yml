@@ -419,10 +419,9 @@ jobs:
       # COMMIT + REBASE + PUSH
       # -------------------------------------------------------
 
-      - name: Commit GitOps Change
+      - name: Commit and Push GitOps Change with Retry
         env:
           IMAGE_TAG: ${{ github.sha }}
-        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -434,18 +433,26 @@ jobs:
             exit 0
           fi
 
-          git commit \
-            -m "chore(gitops): update auth-service image to ${IMAGE_TAG}"
+          git commit -m "chore(gitops): update image to ${IMAGE_TAG}"
 
-          echo "Sincronizando com a branch remota..."
-          git pull origin main --rebase || true
+          # Loop de tentativas para lidar com concorrência entre os microserviços
+          MAX_RETRIES=5
+          RETRY_COUNT=0
 
-          # Se houver conflito por causa da mesma tag de imagem, aceita a versão gerada agora
-          if [ -f .git/CHERRY_PICK_HEAD ]; then
-            git checkout --theirs k8s/03-apps-deployments.yaml
-            git add k8s/03-apps-deployments.yaml
-            git rebase --continue || true
-          fi
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            # Puxa as alterações mais recentes da main com rebase
+            git pull origin main --rebase || true
 
-          echo "Enviando alteração GitOps..."
-          git push origin HEAD:main
+            # Tenta enviar para o GitHub
+            if git push origin HEAD:main; then
+              echo "Push realizado com sucesso!"
+              exit 0
+            fi
+
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Concorrência detectada no Git (tentativa $RETRY_COUNT de $MAX_RETRIES). Aguardando para tentar novamente..."
+            sleep 3
+          done
+
+          echo "Erro: Não foi possível enviar as alterações após $MAX_RETRIES tentativas devido a concorrência."
+          exit 1
