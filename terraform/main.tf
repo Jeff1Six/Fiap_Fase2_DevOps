@@ -282,6 +282,25 @@ resource "aws_eks_node_group" "main" {
 }
 
 # ------------------------------------------------------------------------------
+# KUBECONFIG
+# ------------------------------------------------------------------------------
+
+resource "terraform_data" "update_kubeconfig" {
+  triggers_replace = [
+    aws_eks_cluster.main.endpoint
+  ]
+
+  depends_on = [
+    aws_eks_cluster.main,
+    aws_eks_node_group.main
+  ]
+
+  provisioner "local-exec" {
+    command = "aws eks update-kubeconfig --region ${var.aws_region} --name ${aws_eks_cluster.main.name}"
+  }
+}
+
+# ------------------------------------------------------------------------------
 # RDS & SECRETS MANAGER
 # ------------------------------------------------------------------------------
 resource "aws_db_subnet_group" "rds" {
@@ -392,6 +411,17 @@ resource "local_file" "kubernetes_configmap" {
   )
 }
 
+# Aguarda 60 segundos para a propagação do DNS do EKS
+resource "time_sleep" "wait_for_kubernetes" {
+  depends_on = [
+    aws_eks_cluster.main,
+    aws_eks_node_group.main,
+    terraform_data.update_kubeconfig
+  ]
+
+  create_duration = "60s"
+}
+
 resource "helm_release" "argocd" {
   name = "argocd"
 
@@ -401,7 +431,8 @@ resource "helm_release" "argocd" {
   namespace        = "argocd"
   create_namespace = true
 
+  # Modifique apenas este bloco:
   depends_on = [
-    aws_eks_node_group.main
+    time_sleep.wait_for_kubernetes
   ]
 }
