@@ -118,6 +118,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -141,6 +142,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
@@ -268,6 +270,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -291,6 +294,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
@@ -357,7 +361,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:552816d143a9688b0800f2578f344b9705831a75
           ports:
             - containerPort: 8003
           env:
@@ -422,6 +426,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -445,6 +450,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
@@ -537,6 +543,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -560,6 +567,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
@@ -624,6 +632,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
