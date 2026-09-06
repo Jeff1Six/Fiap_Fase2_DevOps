@@ -109,7 +109,17 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -123,7 +133,17 @@ spec:
   selector:
     app: auth-service
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -186,7 +206,7 @@ spec:
               \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
       containers:
         - name: flag-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:42d74493cb800e990f05023078f6f51227ee078d
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
           ports:
             - containerPort: 8002
           env:
@@ -239,7 +259,17 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -253,7 +283,17 @@ spec:
   selector:
     app: flag-service
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -317,7 +357,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:42d74493cb800e990f05023078f6f51227ee078d
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
           ports:
             - containerPort: 8003
           env:
@@ -373,7 +413,17 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -387,7 +437,17 @@ spec:
   selector:
     app: targeting-service
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -407,7 +467,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:42d74493cb800e990f05023078f6f51227ee078d
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
           ports:
             - containerPort: 8004
           env:
@@ -468,7 +528,17 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -482,7 +552,17 @@ spec:
   selector:
     app: evaluation-service
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -536,7 +616,17 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
+
+
+
+
+
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
