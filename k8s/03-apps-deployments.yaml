@@ -58,7 +58,7 @@ spec:
               '
       containers:
         - name: auth-service
-          image: :268be5441e406870778285a3c36dddab1e4cde97
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-auth-service:268be5441e406870778285a3c36dddab1e4cde97
           ports:
             - containerPort: 8001
           env:
@@ -109,13 +109,15 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
@@ -129,13 +131,15 @@ spec:
   selector:
     app: auth-service
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -251,13 +255,15 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
@@ -271,13 +277,15 @@ spec:
   selector:
     app: flag-service
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -397,13 +405,15 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
@@ -417,13 +427,15 @@ spec:
   selector:
     app: targeting-service
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -504,13 +516,15 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
@@ -524,13 +538,15 @@ spec:
   selector:
     app: evaluation-service
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -584,13 +600,15 @@ spec:
               memory: 256Mi
               cpu: 300m
 
+<<<<<<< HEAD
 
 
 
 
 
+=======
+>>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
