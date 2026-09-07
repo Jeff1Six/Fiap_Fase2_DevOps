@@ -481,6 +481,7 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: SERVICE_API_KEY
+                  optional: true
 
           resources:
             requests:

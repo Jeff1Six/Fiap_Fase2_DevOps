@@ -507,6 +507,98 @@ try {
 
     Write-Section "5 - TESTANDO EVALUATION"
 
+    # O evaluation-service chama internamente o flag-service.
+    # Por isso ele precisa usar a mesma API Key válida que acabou
+    # de ser criada no auth-service neste teste.
+    Write-Host "Atualizando SERVICE_API_KEY do evaluation-service..." -ForegroundColor Yellow
+
+    $encodedApiKey = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($ApiKey)
+    )
+
+    $secretPatch = @{
+        data = @{
+            SERVICE_API_KEY = $encodedApiKey
+        }
+    } | ConvertTo-Json -Compress
+
+    # No PowerShell/Windows, passar JSON direto em -p pode quebrar as aspas.
+    # Usamos um arquivo temporário para preservar o JSON corretamente.
+    $patchFile = Join-Path $env:TEMP "app-secrets-service-api-key-patch.json"
+
+    try {
+        [System.IO.File]::WriteAllText(
+            $patchFile,
+            $secretPatch,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        & kubectl patch secret app-secrets `
+            -n $Namespace `
+            --type=merge `
+            --patch-file $patchFile | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Não foi possível atualizar a SERVICE_API_KEY no Secret app-secrets."
+        }
+    }
+    finally {
+        Remove-Item $patchFile -ErrorAction SilentlyContinue
+    }
+
+    # Variáveis vindas de Secret só são recarregadas quando o Pod é recriado.
+    & kubectl delete pod `
+        -n $Namespace `
+        -l app=evaluation-service `
+        --ignore-not-found=true | Out-Null
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Não foi possível recriar o Pod do evaluation-service."
+    }
+
+    Write-Host "Aguardando o evaluation-service ficar pronto novamente..." -ForegroundColor Yellow
+
+    & kubectl wait `
+        --for=condition=Ready `
+        pod `
+        -l app=evaluation-service `
+        -n $Namespace `
+        --timeout=120s | Out-Null
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "O evaluation-service não ficou Ready dentro do tempo esperado."
+    }
+
+    Write-Ok "SERVICE_API_KEY atualizada no evaluation-service."
+
+    # O Pod pode estar Ready antes de o EndpointSlice/NGINX perceber o novo endpoint.
+    # Aguarda o Service publicar um endpoint pronto antes de testar externamente.
+    Write-Host "Aguardando endpoint do evaluation-service ficar disponível..." -ForegroundColor Yellow
+
+    $endpointReady = $false
+
+    for ($attempt = 1; $attempt -le 15; $attempt++) {
+        $ready = & kubectl get endpointslice `
+            -n $Namespace `
+            -l kubernetes.io/service-name=evaluation-service-svc `
+            -o jsonpath='{.items[0].endpoints[0].conditions.ready}' `
+            2>$null
+
+        if ($LASTEXITCODE -eq 0 -and "$ready".Trim() -eq "true") {
+            $endpointReady = $true
+            break
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    if (-not $endpointReady) {
+        throw "O endpoint do evaluation-service não ficou disponível no Kubernetes."
+    }
+
+    # Pequena folga para o ingress-nginx atualizar o upstream.
+    Start-Sleep -Seconds 3
+
     $evaluationRoute = $routes["Evaluation"]
 
     $evaluateUrl = Join-ExternalUrl `
@@ -514,11 +606,31 @@ try {
         -IngressPath $evaluationRoute.Path `
         -Endpoint "/evaluate?user_id=$TestUserId&flag_name=$FlagName"
 
-    Invoke-Endpoint `
-        -Name "Evaluation - Avaliar flag" `
-        -Method "GET" `
-        -Url $evaluateUrl `
-        -ExpectedStatus @(200) | Out-Null
+    $evaluationResult = $null
+
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        $evaluationResult = Invoke-Endpoint `
+            -Name "Evaluation - Avaliar flag" `
+            -Method "GET" `
+            -Url $evaluateUrl `
+            -ExpectedStatus @(200)
+
+        if ($evaluationResult.Success) {
+            break
+        }
+
+        if ($evaluationResult.StatusCode -eq 503) {
+            Write-Warn "Evaluation retornou 503. Aguardando atualização do upstream... tentativa $attempt de 5"
+            Start-Sleep -Seconds 3
+            continue
+        }
+
+        break
+    }
+
+    if (-not $evaluationResult.Success) {
+        throw "Falha ao avaliar flag no evaluation-service. HTTP $($evaluationResult.StatusCode)."
+    }
 
     Write-Section "6 - ANALYTICS"
 
