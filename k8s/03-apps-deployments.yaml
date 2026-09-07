@@ -403,6 +403,7 @@ spec:
       labels:
         app: evaluation-service
     spec:
+      serviceAccountName: default
       nodeSelector:
         kubernetes.io/os: linux
 
@@ -516,6 +517,7 @@ spec:
       labels:
         app: analytics-service
     spec:
+      serviceAccountName: default
       nodeSelector:
         kubernetes.io/os: linux
 
