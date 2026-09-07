@@ -118,6 +118,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -141,6 +142,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
@@ -206,7 +208,7 @@ spec:
               \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
       containers:
         - name: flag-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:552816d143a9688b0800f2578f344b9705831a75
           ports:
             - containerPort: 8002
           env:
@@ -268,6 +270,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -291,6 +294,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
@@ -357,7 +361,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:552816d143a9688b0800f2578f344b9705831a75
           ports:
             - containerPort: 8003
           env:
@@ -422,6 +426,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -446,6 +451,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: apps/v1
@@ -467,7 +473,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:7e82e38d4b1a792b02f7b0f5e7ecd7df999c5b41
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:552816d143a9688b0800f2578f344b9705831a75
           ports:
             - containerPort: 8004
           env:
@@ -537,6 +543,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: v1
@@ -561,6 +568,7 @@ spec:
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
+
 ---
 
 apiVersion: apps/v1
@@ -582,7 +590,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:42d74493cb800e990f05023078f6f51227ee078d
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:552816d143a9688b0800f2578f344b9705831a75
           ports:
             - containerPort: 8005
           env:
@@ -624,6 +632,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 ---
 
