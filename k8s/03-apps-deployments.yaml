@@ -502,7 +502,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:3b0a8bc15930837f13ddbc322a74c9ef39430fa5
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:e50d7518500ff9b7dd5588c1df4e888f230c14cb
           ports:
             - containerPort: 8005
           env:
