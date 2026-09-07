@@ -174,14 +174,38 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Update AWS credentials in Kubernetes
+      - name: Configure kubectl for EKS
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
         run: |
+          set -euo pipefail
+
+          aws eks update-kubeconfig \
+            --region "${{ env.AWS_REGION }}" \
+            --name "togglemaster-dev"
+
+          echo "Contexto Kubernetes:"
+          kubectl config current-context
+
+          echo "Validando acesso ao cluster:"
+          kubectl get nodes
+          kubectl get namespace desafio3
+
+      - name: Update AWS credentials in Kubernetes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+
           kubectl create secret generic aws-credentials \
-          --namespace desafio3 \
-          --from-literal=AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-          --from-literal=AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-          --from-literal=AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}" \
-          --dry-run=client -o yaml | kubectl apply -f -
+            --namespace desafio3 \
+            --from-literal=AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            --from-literal=AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "Secret AWS atualizado no Kubernetes:"
+          kubectl get secret aws-credentials -n desafio3
 
       - name: Setup Terraform
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
