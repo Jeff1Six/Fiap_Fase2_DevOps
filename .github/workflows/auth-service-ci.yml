@@ -1,21 +1,21 @@
-name: Auth Service CI
+name: Analytics Service CI
 
 on:
   push:
     branches:
       - main
     paths:
-      - "auth-service/**"
+      - "analytics-service/**"
       - "terraform/**"
-      - ".github/workflows/auth-service-ci.yml"
+      - ".github/workflows/analytics-service-ci.yml"
 
   pull_request:
     branches:
       - main
     paths:
-      - "auth-service/**"
+      - "analytics-service/**"
       - "terraform/**"
-      - ".github/workflows/auth-service-ci.yml"
+      - ".github/workflows/analytics-service-ci.yml"
 
 env:
   AWS_REGION: us-east-1
@@ -30,26 +30,36 @@ jobs:
 
     defaults:
       run:
-        working-directory: auth-service
+        working-directory: analytics-service
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          go-version-file: auth-service/go.mod
-          cache-dependency-path: auth-service/go.sum
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: analytics-service/requirements.txt
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
 
-      - name: Build
-        run: go build ./...
+      - name: Validate Python syntax
+        run: python -m compileall .
 
       - name: Unit Tests
-        run: go test ./...
+        shell: bash
+        run: |
+          if find . -type f \( -name "test_*.py" -o -name "*_test.py" \) | grep -q .; then
+            pytest
+          else
+            echo "No unit tests found - skipping tests."
+          fi
 
   # =========================================================
   # 2 - LINTER / STATIC ANALYSIS
@@ -61,26 +71,27 @@ jobs:
 
     defaults:
       run:
-        working-directory: auth-service
+        working-directory: analytics-service
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          go-version-file: auth-service/go.mod
-          cache-dependency-path: auth-service/go.sum
+          python-version: "3.12"
 
-      - name: Go Vet
-        run: go vet ./...
+      - name: Install Flake8
+        run: pip install flake8
 
-      - name: GolangCI-Lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13
-          working-directory: auth-service
+      - name: Run Flake8
+        run: |
+          flake8 . \
+            --count \
+            --select=E9,F63,F7,F82 \
+            --show-source \
+            --statistics
 
   # =========================================================
   # 3 - SECURITY SCAN
@@ -94,16 +105,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Gosec SAST
-        uses: securego/gosec@master
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          args: ./auth-service/...
+          python-version: "3.12"
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Bandit SAST
+        run: |
+          bandit \
+            -r analytics-service \
+            -x analytics-service/tests \
+            -lll \
+            -iii
 
       - name: Trivy SCA
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
-          scan-ref: auth-service
+          scan-ref: analytics-service
           severity: CRITICAL
           exit-code: "1"
 
@@ -126,16 +148,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Docker Build
-        working-directory: auth-service
+        working-directory: analytics-service
         run: |
           docker build \
-            --tag togglemaster-auth-service:${{ github.sha }} \
+            --tag togglemaster-analytics-service:${{ github.sha }} \
             .
 
       - name: Trivy Container Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: togglemaster-auth-service:${{ github.sha }}
+          image-ref: togglemaster-analytics-service:${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
 
@@ -163,24 +185,23 @@ jobs:
         working-directory: terraform
         run: terraform init -input=false
 
-      - name: Read Auth ECR URL
+      - name: Read Analytics ECR URL
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: terraform-output
         working-directory: terraform
         shell: bash
         run: |
-          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."auth"')
+          ECR_URL=$(terraform output -json ecr_repository_urls | jq -r '."analytics"')
 
           if [ -z "${ECR_URL}" ] || [ "${ECR_URL}" = "null" ]; then
-            echo "ERRO: URL do auth-service não encontrada nos outputs."
+            echo "ERRO: URL do analytics-service não encontrada nos outputs."
             exit 1
           fi
 
           echo "ECR URL encontrada: ${ECR_URL}"
-
           echo "ecr_url=${ECR_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate Auth ECR URL
+      - name: Validate Analytics ECR URL
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           ECR_URL: ${{ steps.terraform-output.outputs.ecr_url }}
@@ -206,7 +227,7 @@ jobs:
         shell: bash
         run: |
           docker tag \
-            togglemaster-auth-service:${IMAGE_TAG} \
+            togglemaster-analytics-service:${IMAGE_TAG} \
             "${ECR_URL}:${IMAGE_TAG}"
 
       - name: Push Docker Image
@@ -221,6 +242,8 @@ jobs:
   # =========================================================
   # 5 - UPDATE GITOPS
   # =========================================================
+  # 5 - UPDATE GITOPS
+  # =========================================================
   gitops:
     name: Update GitOps
     runs-on: ubuntu-latest
@@ -228,6 +251,8 @@ jobs:
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    # Todos os microserviços usam o MESMO grupo.
+    # Assim somente um job GitOps altera a main por vez.
     concurrency:
       group: togglemaster-gitops-main
       cancel-in-progress: false
@@ -236,158 +261,154 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
-      # -------------------------------------------------------
-      # VALIDA O OUTPUT RECEBIDO DO JOB DOCKER
-      # -------------------------------------------------------
-
-      - name: Show Docker Output
-        env:
-          ECR_URL: ${{ needs.docker.outputs.ecr_url }}
-        shell: bash
-        run: |
-          echo "ECR recebido do job Docker:"
-          echo "${ECR_URL}"
-
-          if [ -z "${ECR_URL}" ]; then
-            echo "ERRO: ECR_URL recebido do job Docker está vazio."
-            exit 1
-          fi
-
-      # -------------------------------------------------------
-      # INSTALA PYYAML PARA ALTERAR O MANIFESTO
-      # -------------------------------------------------------
-
-      - name: Install PyYAML
-        run: python -m pip install pyyaml
-
-      # -------------------------------------------------------
-      # ATUALIZA SOMENTE A IMAGEM DO AUTH-SERVICE
-      # -------------------------------------------------------
-
-      - name: Update Auth Service Image
+      - name: Update Analytics image and push
         env:
           ECR_URL: ${{ needs.docker.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+          SERVICE_NAME: analytics-service
         shell: bash
         run: |
+          set -euo pipefail
+
           if [ -z "${ECR_URL}" ]; then
             echo "ERRO: ECR_URL está vazio."
-            echo "O manifesto GitOps não será alterado."
             exit 1
           fi
 
-          IMAGE="${ECR_URL}:${IMAGE_TAG}"
-
-          echo "Nova imagem:"
-          echo "${IMAGE}"
-
-          python - <<'PY'
-          import os
-          import yaml
-
-          file_path = "k8s/03-apps-deployments.yaml"
-
-          ecr_url = os.environ["ECR_URL"]
-          image_tag = os.environ["IMAGE_TAG"]
-
-          if not ecr_url:
-              raise Exception("ECR_URL está vazio.")
-
-          image = f"{ecr_url}:{image_tag}"
-
-          with open(file_path, "r", encoding="utf-8") as file:
-              documents = list(yaml.safe_load_all(file))
-
-          found = False
-
-          for document in documents:
-              if not document:
-                  continue
-
-              if (
-                  document.get("kind") == "Deployment"
-                  and document.get("metadata", {}).get("name") == "auth-service"
-              ):
-                  containers = (
-                      document
-                      .get("spec", {})
-                      .get("template", {})
-                      .get("spec", {})
-                      .get("containers", [])
-                  )
-
-                  for container in containers:
-                      if container.get("name") == "auth-service":
-                          container["image"] = image
-                          found = True
-
-          if not found:
-              raise Exception(
-                  "Deployment/container auth-service não encontrado."
-              )
-
-          with open(file_path, "w", encoding="utf-8") as file:
-              yaml.safe_dump_all(
-                  documents,
-                  file,
-                  sort_keys=False
-              )
-
-          print(f"Imagem atualizada para: {image}")
-          PY
-
-      # -------------------------------------------------------
-      # MOSTRA A ALTERAÇÃO QUE SERÁ COMMITADA
-      # -------------------------------------------------------
-
-      - name: Show GitOps Changes
-        run: |
-          echo "===== ALTERAÇÕES GITOPS ====="
-          git diff -- k8s/03-apps-deployments.yaml
-
-      # -------------------------------------------------------
-      # COMMIT + REBASE + PUSH
-      # -------------------------------------------------------
-
-      - name: Commit and Push GitOps Change with Retry
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add k8s/03-apps-deployments.yaml
-
-          if git diff --cached --quiet; then
-            echo "Nenhuma alteração necessária."
-            exit 0
-          fi
-
-          git commit -m "chore(gitops): update image to ${IMAGE_TAG}"
-
-          # Loop de tentativas para lidar com concorrência entre os microserviços
           MAX_RETRIES=5
-          RETRY_COUNT=0
 
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            # Puxa as alterações mais recentes da main com rebase
-            git pull origin main --rebase || true
+          for ATTEMPT in $(seq 1 $MAX_RETRIES); do
+            echo "Tentativa $ATTEMPT de $MAX_RETRIES"
 
-            # Tenta enviar para o GitHub
-            if git push origin HEAD:main; then
-              echo "Push realizado com sucesso!"
+            # Sempre parte da main remota mais recente.
+            # Isso evita rebase com conflito e nunca mantém marcadores <<<<<<< no arquivo.
+            git fetch origin main
+            git reset --hard origin/main
+
+            python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          file_path = Path("k8s/03-apps-deployments.yaml")
+          service = os.environ["SERVICE_NAME"]
+          ecr_url = os.environ["ECR_URL"]
+          image_tag = os.environ["IMAGE_TAG"]
+          image = f"{ecr_url}:{image_tag}"
+
+          content = file_path.read_text(encoding="utf-8")
+
+          # Falha imediatamente se o manifesto já estiver contaminado por conflito Git.
+          conflict_markers = ("<<<<<<<", "=======", ">>>>>>>")
+          if any(marker in content for marker in conflict_markers):
+              raise RuntimeError(
+                  "O manifesto contém marcadores de conflito Git. "
+                  "Corrija k8s/03-apps-deployments.yaml antes de continuar."
+              )
+
+          # Analisa cada documento YAML sem reformatar o arquivo inteiro.
+          # Somente a linha image: do Deployment/container correto será substituída.
+          doc_pattern = re.compile(
+              r"(?ms)(?:\A|^---[ \t]*\r?\n)(.*?)(?=^---[ \t]*$|\Z)"
+          )
+
+          updated_content = None
+
+          for match in doc_pattern.finditer(content):
+              document = match.group(1)
+
+              if not re.search(r"(?m)^\s*kind:\s*Deployment\s*$", document):
+                  continue
+
+              if not re.search(
+                  rf"(?m)^\s*name:\s*{re.escape(service)}\s*$",
+                  document
+              ):
+                  continue
+
+              image_pattern = re.compile(
+                  rf"(?ms)"
+                  rf"(^\s*-\s*name:\s*{re.escape(service)}\s*$"
+                  rf".*?"
+                  rf"^\s*image:\s*)"
+                  rf"[^\r\n]+"
+              )
+
+              updated_document, count = image_pattern.subn(
+                  lambda m: m.group(1) + image,
+                  document,
+                  count=1
+              )
+
+              if count != 1:
+                  raise RuntimeError(
+                      f"Linha image do container {service} não encontrada."
+                  )
+
+              start, end = match.span(1)
+              updated_content = (
+                  content[:start] + updated_document + content[end:]
+              )
+              break
+
+          if updated_content is None:
+              raise RuntimeError(
+                  f"Deployment {service} não encontrado em {file_path}."
+              )
+
+          file_path.write_text(updated_content, encoding="utf-8")
+          print(f"Imagem do {service} atualizada para: {image}")
+          PY
+
+            echo "===== ALTERAÇÕES GITOPS ====="
+            git diff -- k8s/03-apps-deployments.yaml
+
+            CHANGED_FILES=$(git diff --name-only)
+
+            if [ "${CHANGED_FILES}" != "k8s/03-apps-deployments.yaml" ]; then
+              echo "ERRO: arquivos inesperados foram modificados:"
+              echo "${CHANGED_FILES}"
+              exit 1
+            fi
+
+            IMAGE_CHANGES=$(git diff --unified=0 -- k8s/03-apps-deployments.yaml | \
+              grep -E '^[+-][[:space:]]*image:' || true)
+
+            REMOVED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^-' || true)
+            ADDED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^+' || true)
+
+            if [ "${REMOVED_COUNT}" -ne 1 ] || [ "${ADDED_COUNT}" -ne 1 ]; then
+              echo "ERRO: o workflow deveria alterar somente uma imagem."
+              echo "${IMAGE_CHANGES}"
+              exit 1
+            fi
+
+            git add k8s/03-apps-deployments.yaml
+
+            if git diff --cached --quiet; then
+              echo "Nenhuma alteração necessária."
               exit 0
             fi
 
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "Concorrência detectada no Git (tentativa $RETRY_COUNT de $MAX_RETRIES). Aguardando para tentar novamente..."
-            sleep 3
+            git commit -m "chore(gitops): update ${SERVICE_NAME} image to ${IMAGE_TAG}"
+
+            if git push origin HEAD:main; then
+              echo "Push GitOps realizado com sucesso."
+              exit 0
+            fi
+
+            echo "A main mudou antes do push. Reaplicando a alteração sobre a versão mais recente..."
+            sleep $((ATTEMPT * 2))
           done
 
-          echo "Erro: Não foi possível enviar as alterações após $MAX_RETRIES tentativas devido a concorrência."
+          echo "ERRO: não foi possível atualizar a main após $MAX_RETRIES tentativas."
           exit 1

@@ -214,6 +214,8 @@ jobs:
   # =========================================================
   # 5 - UPDATE GITOPSs
   # =========================================================
+  # 5 - UPDATE GITOPS
+  # =========================================================
   gitops:
     name: Update GitOps
     runs-on: ubuntu-latest
@@ -221,89 +223,164 @@ jobs:
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    # Todos os microserviços usam o MESMO grupo.
+    # Assim somente um job GitOps altera a main por vez.
+    concurrency:
+      group: togglemaster-gitops-main
+      cancel-in-progress: false
+
     permissions:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
-      - name: Update Flag Service Image
+      - name: Update Flag image and push
         env:
           ECR_URL: ${{ needs.docker.outputs.ecr_url }}
           IMAGE_TAG: ${{ github.sha }}
+          SERVICE_NAME: flag-service
         shell: bash
         run: |
-          python - <<'PY'
+          set -euo pipefail
+
+          if [ -z "${ECR_URL}" ]; then
+            echo "ERRO: ECR_URL está vazio."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          MAX_RETRIES=5
+
+          for ATTEMPT in $(seq 1 $MAX_RETRIES); do
+            echo "Tentativa $ATTEMPT de $MAX_RETRIES"
+
+            # Sempre parte da main remota mais recente.
+            # Isso evita rebase com conflito e nunca mantém marcadores <<<<<<< no arquivo.
+            git fetch origin main
+            git reset --hard origin/main
+
+            python - <<'PY'
           import os
           import re
           from pathlib import Path
 
           file_path = Path("k8s/03-apps-deployments.yaml")
+          service = os.environ["SERVICE_NAME"]
+          ecr_url = os.environ["ECR_URL"]
+          image_tag = os.environ["IMAGE_TAG"]
+          image = f"{ecr_url}:{image_tag}"
 
-          image = f"{os.environ['ECR_URL']}:{os.environ['IMAGE_TAG']}"
+          content = file_path.read_text(encoding="utf-8")
 
-          content = file_path.read_text()
+          # Falha imediatamente se o manifesto já estiver contaminado por conflito Git.
+          conflict_markers = ("<<<<<<<", "=======", ">>>>>>>")
+          if any(marker in content for marker in conflict_markers):
+              raise RuntimeError(
+                  "O manifesto contém marcadores de conflito Git. "
+                  "Corrija k8s/03-apps-deployments.yaml antes de continuar."
+              )
 
-          pattern = r'^(\s*image:\s*).*(?:togglemaster-)?flag-service:[^\s]+'
-
-          new_content, count = re.subn(
-            pattern,
-            lambda match: f"{match.group(1)}{image}",
-            content,
-            count=1,
-            flags=re.MULTILINE
+          # Analisa cada documento YAML sem reformatar o arquivo inteiro.
+          # Somente a linha image: do Deployment/container correto será substituída.
+          doc_pattern = re.compile(
+              r"(?ms)(?:\A|^---[ \t]*\r?\n)(.*?)(?=^---[ \t]*$|\Z)"
           )
 
-          if count == 0:
-            raise Exception(
-              "Imagem do flag-service não encontrada em k8s/03-apps-deployments.yaml"
-            )
+          updated_content = None
 
-          file_path.write_text(new_content)
+          for match in doc_pattern.finditer(content):
+              document = match.group(1)
 
-          print(f"Imagem atualizada para: {image}")
+              if not re.search(r"(?m)^\s*kind:\s*Deployment\s*$", document):
+                  continue
+
+              if not re.search(
+                  rf"(?m)^\s*name:\s*{re.escape(service)}\s*$",
+                  document
+              ):
+                  continue
+
+              image_pattern = re.compile(
+                  rf"(?ms)"
+                  rf"(^\s*-\s*name:\s*{re.escape(service)}\s*$"
+                  rf".*?"
+                  rf"^\s*image:\s*)"
+                  rf"[^\r\n]+"
+              )
+
+              updated_document, count = image_pattern.subn(
+                  lambda m: m.group(1) + image,
+                  document,
+                  count=1
+              )
+
+              if count != 1:
+                  raise RuntimeError(
+                      f"Linha image do container {service} não encontrada."
+                  )
+
+              start, end = match.span(1)
+              updated_content = (
+                  content[:start] + updated_document + content[end:]
+              )
+              break
+
+          if updated_content is None:
+              raise RuntimeError(
+                  f"Deployment {service} não encontrado em {file_path}."
+              )
+
+          file_path.write_text(updated_content, encoding="utf-8")
+          print(f"Imagem do {service} atualizada para: {image}")
           PY
 
-      - name: Show GitOps Changes
-        run: git diff -- k8s/03-apps-deployments.yaml
+            echo "===== ALTERAÇÕES GITOPS ====="
+            git diff -- k8s/03-apps-deployments.yaml
 
-      - name: Commit and Push GitOps Change with Retry
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            CHANGED_FILES=$(git diff --name-only)
 
-          git add k8s/03-apps-deployments.yaml
+            if [ "${CHANGED_FILES}" != "k8s/03-apps-deployments.yaml" ]; then
+              echo "ERRO: arquivos inesperados foram modificados:"
+              echo "${CHANGED_FILES}"
+              exit 1
+            fi
 
-          if git diff --cached --quiet; then
-            echo "Nenhuma alteração necessária."
-            exit 0
-          fi
+            IMAGE_CHANGES=$(git diff --unified=0 -- k8s/03-apps-deployments.yaml | \
+              grep -E '^[+-][[:space:]]*image:' || true)
 
-          git commit -m "chore(gitops): update image to ${IMAGE_TAG}"
+            REMOVED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^-' || true)
+            ADDED_COUNT=$(echo "${IMAGE_CHANGES}" | grep -c '^+' || true)
 
-          # Loop de tentativas para lidar com concorrência entre os microserviços
-          MAX_RETRIES=5
-          RETRY_COUNT=0
+            if [ "${REMOVED_COUNT}" -ne 1 ] || [ "${ADDED_COUNT}" -ne 1 ]; then
+              echo "ERRO: o workflow deveria alterar somente uma imagem."
+              echo "${IMAGE_CHANGES}"
+              exit 1
+            fi
 
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            # Puxa as alterações mais recentes da main com rebase
-            git pull origin main --rebase || true
+            git add k8s/03-apps-deployments.yaml
 
-            # Tenta enviar para o GitHub
-            if git push origin HEAD:main; then
-              echo "Push realizado com sucesso!"
+            if git diff --cached --quiet; then
+              echo "Nenhuma alteração necessária."
               exit 0
             fi
 
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "Concorrência detectada no Git (tentativa $RETRY_COUNT de $MAX_RETRIES). Aguardando para tentar novamente..."
-            sleep 3
+            git commit -m "chore(gitops): update ${SERVICE_NAME} image to ${IMAGE_TAG}"
+
+            if git push origin HEAD:main; then
+              echo "Push GitOps realizado com sucesso."
+              exit 0
+            fi
+
+            echo "A main mudou antes do push. Reaplicando a alteração sobre a versão mais recente..."
+            sleep $((ATTEMPT * 2))
           done
 
-          echo "Erro: Não foi possível enviar as alterações após $MAX_RETRIES tentativas devido a concorrência."
+          echo "ERRO: não foi possível atualizar a main após $MAX_RETRIES tentativas."
           exit 1
