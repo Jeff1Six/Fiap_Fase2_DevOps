@@ -624,34 +624,309 @@ try {
         throw "Falha ao avaliar flag no evaluation-service. HTTP $($evaluationResult.StatusCode)."
     }
 
-    Write-Section "6 - ANALYTICS"
+    Write-Section "6 - TESTANDO REDIS"
 
-    if ($routes.ContainsKey("Analytics")) {
-        $analyticsRoute = $routes["Analytics"]
+    $redisHost = & kubectl get configmap app-configmap `
+        -n $Namespace `
+        -o jsonpath='{.data.REDIS_HOST}'
 
-        $analyticsHealth = Join-ExternalUrl `
-            -BaseUrl $analyticsRoute.BaseUrl `
-            -IngressPath $analyticsRoute.Path `
-            -Endpoint "/health"
+    $redisPort = & kubectl get configmap app-configmap `
+        -n $Namespace `
+        -o jsonpath='{.data.REDIS_PORT}'
 
-        Invoke-Endpoint `
-            -Name "Analytics - Health" `
-            -Method "GET" `
-            -Url $analyticsHealth `
-            -ExpectedStatus @(200) | Out-Null
-
-        Write-Host ""
-        Write-Host "O analytics-service é um worker." -ForegroundColor Yellow
-        Write-Host "A chamada ao evaluation-service deve gerar evento para SQS,"
-        Write-Host "que será consumido pelo analytics e persistido no DynamoDB."
+    if (
+        [string]::IsNullOrWhiteSpace($redisHost) -or
+        [string]::IsNullOrWhiteSpace($redisPort)
+    ) {
+        throw "REDIS_HOST ou REDIS_PORT não encontrados no ConfigMap app-configmap."
     }
+
+    $redisTestPod = "redis-test-" + (Get-Random -Minimum 1000 -Maximum 9999)
+
+    try {
+        Write-Host "Testando conexão com Redis..." -ForegroundColor Yellow
+
+        & kubectl run $redisTestPod `
+            -n $Namespace `
+            --restart=Never `
+            --image=redis:7-alpine `
+            --command `
+            -- redis-cli `
+                -h $redisHost `
+                -p $redisPort `
+                ping | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Não foi possível criar o Pod temporário para testar o Redis."
+        }
+
+        $redisFinished = $false
+
+        for ($attempt = 1; $attempt -le 45; $attempt++) {
+            $phase = & kubectl get pod $redisTestPod `
+                -n $Namespace `
+                -o jsonpath='{.status.phase}' `
+                2>$null
+
+            if ("$phase".Trim() -eq "Succeeded") {
+                $redisFinished = $true
+                break
+            }
+
+            if ("$phase".Trim() -eq "Failed") {
+                break
+            }
+
+            Start-Sleep -Seconds 2
+        }
+
+        $redisOutput = & kubectl logs $redisTestPod `
+            -n $Namespace `
+            2>$null
+
+        if (-not $redisFinished -or (($redisOutput -join "`n").Trim() -ne "PONG")) {
+            throw "Redis não respondeu PONG."
+        }
+
+        Write-Ok "Redis respondeu PONG."
+
+        Write-Host "Validando cache do evaluation-service..." -ForegroundColor Yellow
+
+        $cacheResult = Invoke-Endpoint `
+            -Name "Evaluation - Segunda avaliação para validar cache" `
+            -Method "GET" `
+            -Url $evaluateUrl `
+            -ExpectedStatus @(200)
+
+        if (-not $cacheResult.Success) {
+            throw "Falha ao executar segunda avaliação para validar o Redis."
+        }
+
+        Start-Sleep -Seconds 1
+
+        $evaluationLogs = & kubectl logs `
+            -n $Namespace `
+            deployment/evaluation-service `
+            --since=30s `
+            2>$null
+
+        if (($evaluationLogs -join "`n") -match "Cache HIT") {
+            Write-Ok "Cache HIT identificado no evaluation-service."
+        }
+        else {
+            Write-Warn "Redis respondeu PONG, mas não encontrei 'Cache HIT' nos logs recentes."
+        }
+    }
+    finally {
+        & kubectl delete pod $redisTestPod `
+            -n $Namespace `
+            --ignore-not-found=true `
+            --wait=false `
+            2>$null | Out-Null
+    }
+
+    Write-Section "7 - TESTANDO SQS"
+
+    $sqsUrl = & kubectl get configmap app-configmap `
+        -n $Namespace `
+        -o jsonpath='{.data.AWS_SQS_URL}'
+
+    if ([string]::IsNullOrWhiteSpace($sqsUrl)) {
+        throw "AWS_SQS_URL não encontrada no ConfigMap app-configmap."
+    }
+
+    Write-Host "Validando fila SQS..." -ForegroundColor Yellow
+
+    $sqsAttributesJson = & aws sqs get-queue-attributes `
+        --queue-url $sqsUrl `
+        --attribute-names `
+            ApproximateNumberOfMessages `
+            ApproximateNumberOfMessagesNotVisible `
+            ApproximateNumberOfMessagesDelayed `
+        --region $AwsRegion `
+        --output json `
+        2>$null
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($sqsAttributesJson -join "`n"))) {
+        throw "Não foi possível consultar a fila SQS."
+    }
+
+    $sqsAttributes = ($sqsAttributesJson -join "`n") | ConvertFrom-Json
+
+    Write-Ok "Fila SQS acessível."
+    Write-Host "Mensagens disponíveis: $($sqsAttributes.Attributes.ApproximateNumberOfMessages)"
+    Write-Host "Mensagens em processamento: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesNotVisible)"
+    Write-Host "Mensagens atrasadas: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesDelayed)"
+
+    $sqsTestUser = "sqs-test-" + (Get-Date -Format "yyyyMMddHHmmss")
+
+    $sqsEvaluateUrl = Join-ExternalUrl `
+        -BaseUrl $evaluationRoute.BaseUrl `
+        -IngressPath $evaluationRoute.Path `
+        -Endpoint "/evaluate?user_id=$sqsTestUser&flag_name=$FlagName"
+
+    $sqsEvaluationResult = Invoke-Endpoint `
+        -Name "Evaluation - Gerar evento para SQS" `
+        -Method "GET" `
+        -Url $sqsEvaluateUrl `
+        -ExpectedStatus @(200)
+
+    if (-not $sqsEvaluationResult.Success) {
+        throw "Não foi possível gerar o evento de teste para a SQS."
+    }
+
+    Write-Ok "Evento de avaliação gerado para o fluxo SQS."
+
+    Write-Section "8 - TESTANDO ANALYTICS E DYNAMODB"
+
+    if (-not $routes.ContainsKey("Analytics")) {
+        throw "Não encontrei a rota do analytics-service."
+    }
+
+    $analyticsRoute = $routes["Analytics"]
+
+    $analyticsHealth = Join-ExternalUrl `
+        -BaseUrl $analyticsRoute.BaseUrl `
+        -IngressPath $analyticsRoute.Path `
+        -Endpoint "/health"
+
+    $analyticsHealthResult = Invoke-Endpoint `
+        -Name "Analytics - Health" `
+        -Method "GET" `
+        -Url $analyticsHealth `
+        -ExpectedStatus @(200)
+
+    if (-not $analyticsHealthResult.Success) {
+        throw "Analytics health check falhou."
+    }
+
+    $dynamoTable = & kubectl get configmap app-configmap `
+        -n $Namespace `
+        -o jsonpath='{.data.AWS_DYNAMODB_TABLE}'
+
+    if ([string]::IsNullOrWhiteSpace($dynamoTable)) {
+        throw "AWS_DYNAMODB_TABLE não encontrada no ConfigMap app-configmap."
+    }
+
+    Write-Host "Validando tabela DynamoDB..." -ForegroundColor Yellow
+
+    $tableJson = & aws dynamodb describe-table `
+        --table-name $dynamoTable `
+        --region $AwsRegion `
+        --output json `
+        2>$null
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($tableJson -join "`n"))) {
+        throw "Não foi possível consultar a tabela DynamoDB '$dynamoTable'."
+    }
+
+    $tableInfo = ($tableJson -join "`n") | ConvertFrom-Json
+
+    if ($tableInfo.Table.TableStatus -ne "ACTIVE") {
+        throw "Tabela DynamoDB '$dynamoTable' não está ACTIVE."
+    }
+
+    Write-Ok "DynamoDB $dynamoTable está ACTIVE."
+
+    $beforeCountJson = & aws dynamodb scan `
+        --table-name $dynamoTable `
+        --region $AwsRegion `
+        --select COUNT `
+        --output json `
+        2>$null
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Não foi possível contar os registros atuais do DynamoDB."
+    }
+
+    $beforeCount = [int](($beforeCountJson -join "`n") | ConvertFrom-Json).Count
+
+    Write-Host "Registros antes do teste: $beforeCount"
+
+    $dynamoTestUser = "dynamo-test-" + (Get-Date -Format "yyyyMMddHHmmss")
+
+    $dynamoEvaluateUrl = Join-ExternalUrl `
+        -BaseUrl $evaluationRoute.BaseUrl `
+        -IngressPath $evaluationRoute.Path `
+        -Endpoint "/evaluate?user_id=$dynamoTestUser&flag_name=$FlagName"
+
+    $dynamoEvaluationResult = Invoke-Endpoint `
+        -Name "Evaluation - Gerar evento para DynamoDB" `
+        -Method "GET" `
+        -Url $dynamoEvaluateUrl `
+        -ExpectedStatus @(200)
+
+    if (-not $dynamoEvaluationResult.Success) {
+        throw "Não foi possível gerar o evento para testar Analytics/DynamoDB."
+    }
+
+    Write-Host "Aguardando Analytics consumir SQS e persistir no DynamoDB..." -ForegroundColor Yellow
+
+    $dynamoPersisted = $false
+    $afterCount = $beforeCount
+
+    for ($attempt = 1; $attempt -le 8; $attempt++) {
+        Start-Sleep -Seconds 5
+
+        $afterCountJson = & aws dynamodb scan `
+            --table-name $dynamoTable `
+            --region $AwsRegion `
+            --select COUNT `
+            --output json `
+            2>$null
+
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+
+        $afterCount = [int](($afterCountJson -join "`n") | ConvertFrom-Json).Count
+
+        if ($afterCount -gt $beforeCount) {
+            $dynamoPersisted = $true
+            break
+        }
+    }
+
+    $analyticsLogs = & kubectl logs `
+        -n $Namespace `
+        deployment/analytics-service `
+        --since=90s `
+        2>$null
+
+    $relevantAnalyticsLogs = @(
+        $analyticsLogs |
+            Select-String -Pattern "Recebidas|Processando|DynamoDB|salvo"
+    )
+
+    if ($relevantAnalyticsLogs.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Logs recentes do Analytics:" -ForegroundColor DarkGray
+
+        foreach ($logLine in $relevantAnalyticsLogs) {
+            Write-Host $logLine.Line -ForegroundColor DarkGray
+        }
+    }
+
+    if (-not $dynamoPersisted) {
+        throw "O DynamoDB não recebeu novo registro dentro do tempo esperado."
+    }
+
+    Write-Ok "Analytics consumiu o fluxo e o DynamoDB recebeu novo registro."
+    Write-Host "Registros antes:  $beforeCount"
+    Write-Host "Registros depois: $afterCount"
 
     Write-Section "TESTE FINALIZADO"
 
-    Write-Ok "Fluxo de endpoints AWS concluído."
+    Write-Ok "Fluxo de endpoints e infraestrutura AWS concluído."
     Write-Host ""
     Write-Host "Flag utilizada: $FlagName"
     Write-Host "Usuário teste:  $TestUserId"
+    Write-Host ""
+    Write-Host "Infraestrutura validada:"
+    Write-Host "  Redis    -> PONG / Cache"
+    Write-Host "  SQS      -> fila acessível / evento gerado"
+    Write-Host "  Analytics -> worker saudável"
+    Write-Host "  DynamoDB -> tabela ACTIVE / novo registro persistido"
 }
 catch {
     Write-Host ""
