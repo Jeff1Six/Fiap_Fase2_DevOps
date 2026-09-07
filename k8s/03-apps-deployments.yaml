@@ -528,6 +528,11 @@ spec:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_SQS_URL
+            - name: AWS_DYNAMODB_TABLE
+              valueFrom:
+                configMapKeyRef:
+                  name: app-configmap
+                  key: AWS_DYNAMODB_TABLE
           resources:
             requests:
               memory: 128Mi
