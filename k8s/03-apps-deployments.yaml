@@ -403,6 +403,7 @@ spec:
       labels:
         app: evaluation-service
     spec:
+      serviceAccountName: evaluation-service-sa
       nodeSelector:
         kubernetes.io/os: linux
       containers:
@@ -498,6 +499,7 @@ spec:
       labels:
         app: analytics-service
     spec:
+      serviceAccountName: analytics-service-sa
       nodeSelector:
         kubernetes.io/os: linux
       containers:
@@ -511,23 +513,28 @@ spec:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_REGION
+
             - name: PORT
               value: "8005"
+
             - name: AWS_SQS_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_SQS_URL
+
             - name: SQS_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_SQS_URL
+
             - name: QUEUE_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_SQS_URL
+
             - name: AWS_DYNAMODB_TABLE
               valueFrom:
                 configMapKeyRef:
