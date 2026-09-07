@@ -119,6 +119,7 @@ spec:
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
 
+
 ---
 
 apiVersion: v1
@@ -142,6 +143,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 
 ---
@@ -271,6 +273,7 @@ spec:
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
 
+
 ---
 
 apiVersion: v1
@@ -294,6 +297,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 
 ---
@@ -427,6 +431,7 @@ spec:
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
 
+
 ---
 
 apiVersion: v1
@@ -450,6 +455,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 
 ---
@@ -544,6 +550,7 @@ spec:
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
 
+
 ---
 
 apiVersion: v1
@@ -569,6 +576,7 @@ spec:
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
 
 
+
 ---
 
 apiVersion: apps/v1
@@ -590,7 +598,7 @@ spec:
         kubernetes.io/os: linux
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:552816d143a9688b0800f2578f344b9705831a75
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:3b0a8bc15930837f13ddbc322a74c9ef39430fa5
           ports:
             - containerPort: 8005
           env:
@@ -632,6 +640,7 @@ spec:
 
 =======
 >>>>>>> f33f142 (fix(gitops): fix missing ECR registry url for auth-service)
+
 
 
 ---
