@@ -23,6 +23,7 @@ data:
   TARGETING_SERVICE_URL: "http://targeting-service-svc.desafio3.svc.cluster.local:8080"
 
   AWS_SQS_URL: "https://sqs.us-east-1.amazonaws.com/596081564794/togglemaster-sqs"
+  AWS_DYNAMODB_TABLE: "ToggleMasterAnalytics"
 
   PORT: "8080"
   APP_PORT: "8080"

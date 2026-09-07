@@ -407,6 +407,8 @@ resource "local_file" "kubernetes_configmap" {
       sqs_url = aws_sqs_queue.main.url
 
       aws_region = var.aws_region
+
+      dynamodb_table_name = aws_dynamodb_table.analytics.name
     }
   )
 }
@@ -435,4 +437,21 @@ resource "helm_release" "argocd" {
   depends_on = [
     time_sleep.wait_for_kubernetes
   ]
+}
+
+resource "aws_dynamodb_table" "analytics" {
+  name         = "ToggleMasterAnalytics"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "event_id"
+
+  attribute {
+    name = "event_id"
+    type = "S"
+  }
+
+  tags = {
+    Name        = "ToggleMasterAnalytics"
+    Environment = "dev"
+    Project     = "ToggleMaster"
+  }
 }

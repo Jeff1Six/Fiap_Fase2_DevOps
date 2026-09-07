@@ -78,3 +78,7 @@ output "aws_region" {
   description = "Região AWS utilizada"
   value       = var.aws_region
 }
+
+output "dynamodb_table_name" {
+  value = aws_dynamodb_table.analytics.name
+}
