@@ -403,64 +403,82 @@ spec:
       labels:
         app: evaluation-service
     spec:
-      serviceAccountName: evaluation-service-sa
       nodeSelector:
         kubernetes.io/os: linux
+
       containers:
         - name: evaluation-service
           image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:b6a0fc8f723586995355dffc03daaf9e3245d2c5
+
           ports:
             - containerPort: 8004
+
+          # Credenciais temporárias do AWS Academy
+          envFrom:
+            - secretRef:
+                name: aws-credentials
+
           env:
             - name: REDIS_HOST
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: REDIS_HOST
+
             - name: REDIS_PORT
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: REDIS_PORT
+
             - name: REDIS_URL
               value: redis://$(REDIS_HOST):$(REDIS_PORT)
+
             - name: FLAG_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: FLAG_SERVICE_URL
+
             - name: AUTH_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AUTH_SERVICE_URL
+
             - name: TARGETING_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: TARGETING_SERVICE_URL
+
             - name: AWS_SQS_URL
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_SQS_URL
+
             - name: AWS_REGION
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_REGION
+
             - name: PORT
               value: "8004"
+
             - name: MASTER_KEY
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
                   key: SERVICE_API_KEY
+
             - name: SERVICE_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
                   key: SERVICE_API_KEY
+
           resources:
             requests:
               memory: 128Mi
@@ -499,23 +517,27 @@ spec:
       labels:
         app: analytics-service
     spec:
-      serviceAccountName: analytics-service-sa
       nodeSelector:
         kubernetes.io/os: linux
+
       containers:
         - name: analytics-service
           image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:b6a0fc8f723586995355dffc03daaf9e3245d2c5
+
           ports:
             - containerPort: 8005
+
+          # Credenciais temporárias do AWS Academy
+          envFrom:
+            - secretRef:
+                name: aws-credentials
+
           env:
             - name: AWS_REGION
               valueFrom:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_REGION
-
-            - name: PORT
-              value: "8005"
 
             - name: AWS_SQS_URL
               valueFrom:
@@ -540,6 +562,10 @@ spec:
                 configMapKeyRef:
                   name: app-configmap
                   key: AWS_DYNAMODB_TABLE
+
+            - name: PORT
+              value: "8005"
+
           resources:
             requests:
               memory: 128Mi
