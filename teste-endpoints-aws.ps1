@@ -5,7 +5,7 @@ param(
     [string]$ClusterName = "togglemaster-dev",
     [switch]$AtualizarKubeconfig,
     [switch]$FluxoCompleto,
-    [string]$MasterKey = "",
+    [string]$MasterKey = "admin-secreto-123",
     [string]$FlagName = "enable-new-dashboard",
     [string]$TestUserId = "user-123"
 )

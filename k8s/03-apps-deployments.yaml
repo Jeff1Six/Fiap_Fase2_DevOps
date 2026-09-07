@@ -87,16 +87,19 @@ spec:
                 configMapKeyRef:
                   name: app-configmap
                   key: DB_AUTH_NAME
+
             - name: SERVICE_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
                   key: SERVICE_API_KEY
+
             - name: MASTER_KEY
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
-                  key: SERVICE_API_KEY
+                  key: MASTER_KEY
+
             - name: APP_PORT
               value: "8001"
             - name: DATABASE_URL
@@ -471,7 +474,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
-                  key: SERVICE_API_KEY
+                  key: MASTER_KEY
 
             - name: SERVICE_API_KEY
               valueFrom:
