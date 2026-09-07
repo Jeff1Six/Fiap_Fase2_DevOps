@@ -408,7 +408,7 @@ spec:
 
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:b62044c51768c4d0a78b3398a0d7c5a6e1d69c93
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:f65dab29d6d4494b275f1fc5749ff42ecc2c56ed
           ports:
             - containerPort: 8004
 
@@ -521,7 +521,7 @@ spec:
 
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:b62044c51768c4d0a78b3398a0d7c5a6e1d69c93
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:f65dab29d6d4494b275f1fc5749ff42ecc2c56ed
           ports:
             - containerPort: 8005
 
