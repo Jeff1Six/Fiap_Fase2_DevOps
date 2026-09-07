@@ -408,7 +408,7 @@ spec:
 
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:f65dab29d6d4494b275f1fc5749ff42ecc2c56ed
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:5e32af73d350f20d5608247bb1c05b57bf5225ee
           ports:
             - containerPort: 8004
 
