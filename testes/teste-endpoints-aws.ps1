@@ -11,6 +11,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
     $PSNativeCommandUseErrorActionPreference = $false
@@ -271,6 +273,374 @@ function Invoke-Endpoint {
     }
 }
 
+
+function Get-DeploymentAwsCredentialMode {
+    param(
+        [string]$Namespace,
+        [string]$DeploymentName
+    )
+
+    $deployment = Invoke-KubectlJson -Arguments @(
+        "get", "deployment", $DeploymentName,
+        "-n", $Namespace,
+        "-o", "json"
+    )
+
+    if (-not $deployment) {
+        return $null
+    }
+
+    $container = @(
+        $deployment.spec.template.spec.containers |
+            Where-Object { $_.name -eq $DeploymentName }
+    ) | Select-Object -First 1
+
+    if (-not $container) {
+        $container = @($deployment.spec.template.spec.containers)[0]
+    }
+
+    $secretNames = @()
+
+    foreach ($envFrom in @($container.envFrom)) {
+        if ($envFrom.secretRef -and $envFrom.secretRef.name) {
+            $secretNames += [string]$envFrom.secretRef.name
+        }
+    }
+
+    $mode = if ($secretNames -contains "aws-credentials") {
+        "Secret"
+    }
+    else {
+        "NodeRole"
+    }
+
+    return [PSCustomObject]@{
+        Deployment  = $DeploymentName
+        Mode        = $mode
+        SecretNames = $secretNames
+    }
+}
+
+function Get-WorkloadNodeAwsContext {
+    param(
+        [string]$Namespace,
+        [string]$DeploymentName,
+        [string]$AwsRegion,
+        [string]$ClusterName
+    )
+
+    $podList = Invoke-KubectlJson -Arguments @(
+        "get", "pods",
+        "-n", $Namespace,
+        "-l", "app=$DeploymentName",
+        "-o", "json"
+    )
+
+    if (-not $podList -or -not $podList.items) {
+        return $null
+    }
+
+    $pod = @(
+        $podList.items |
+            Where-Object { $_.status.phase -eq "Running" }
+    ) | Select-Object -First 1
+
+    if (-not $pod) {
+        $pod = @($podList.items)[0]
+    }
+
+    $nodeName = [string]$pod.spec.nodeName
+
+    if ([string]::IsNullOrWhiteSpace($nodeName)) {
+        return $null
+    }
+
+    $node = Invoke-KubectlJson -Arguments @(
+        "get", "node", $nodeName,
+        "-o", "json"
+    )
+
+    if (-not $node) {
+        return $null
+    }
+
+    $providerId = [string]$node.spec.providerID
+    $instanceId = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($providerId)) {
+        $instanceId = ($providerId -split "/")[-1]
+    }
+
+    $nodeGroupName = $null
+
+    if ($node.metadata.labels) {
+        $nodeGroupName = [string]$node.metadata.labels.'eks.amazonaws.com/nodegroup'
+    }
+
+    $nodeRole = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($nodeGroupName)) {
+        $nodeRoleOutput = & aws eks describe-nodegroup `
+            --cluster-name $ClusterName `
+            --nodegroup-name $nodeGroupName `
+            --region $AwsRegion `
+            --query "nodegroup.nodeRole" `
+            --output text `
+            2>$null
+
+        if ($LASTEXITCODE -eq 0) {
+            $nodeRole = ($nodeRoleOutput -join "`n").Trim()
+        }
+    }
+
+    $hopLimit = $null
+    $httpTokens = $null
+    $httpEndpoint = $null
+    $instanceProfile = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($instanceId)) {
+        $instanceJson = & aws ec2 describe-instances `
+            --instance-ids $instanceId `
+            --region $AwsRegion `
+            --output json `
+            2>$null
+
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($instanceJson -join "`n"))) {
+            try {
+                $instanceInfo = ($instanceJson -join "`n") | ConvertFrom-Json
+                $instance = $instanceInfo.Reservations[0].Instances[0]
+
+                $hopLimit = $instance.MetadataOptions.HttpPutResponseHopLimit
+                $httpTokens = $instance.MetadataOptions.HttpTokens
+                $httpEndpoint = $instance.MetadataOptions.HttpEndpoint
+
+                if ($instance.IamInstanceProfile) {
+                    $instanceProfile = $instance.IamInstanceProfile.Arn
+                }
+            }
+            catch {
+                # Diagnóstico opcional. O teste funcional continuará.
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Deployment      = $DeploymentName
+        PodName         = [string]$pod.metadata.name
+        NodeName        = $nodeName
+        InstanceId      = $instanceId
+        NodeGroupName   = $nodeGroupName
+        NodeRole        = $nodeRole
+        InstanceProfile = $instanceProfile
+        HopLimit        = $hopLimit
+        HttpTokens      = $httpTokens
+        HttpEndpoint    = $httpEndpoint
+    }
+}
+
+function Test-NodeRoleFromHostNetwork {
+    param(
+        [string]$Namespace,
+        [string]$NodeName,
+        [string]$AwsRegion
+    )
+
+    if ([string]::IsNullOrWhiteSpace($NodeName)) {
+        return [PSCustomObject]@{
+            Success = $false
+            Arn     = $null
+        }
+    }
+
+    $podName = "labrole-test-" + (Get-Random -Minimum 1000 -Maximum 9999)
+
+    $yaml = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $podName
+  namespace: $Namespace
+spec:
+  nodeName: $NodeName
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  restartPolicy: Never
+  containers:
+    - name: aws
+      image: amazon/aws-cli:latest
+      command:
+        - aws
+      args:
+        - sts
+        - get-caller-identity
+        - --region
+        - $AwsRegion
+"@
+
+    try {
+        $yaml | & kubectl apply -f - 2>$null | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            return [PSCustomObject]@{
+                Success = $false
+                Arn     = $null
+            }
+        }
+
+        $finished = $false
+
+        for ($attempt = 1; $attempt -le 45; $attempt++) {
+            $phase = & kubectl get pod $podName `
+                -n $Namespace `
+                -o jsonpath='{.status.phase}' `
+                2>$null
+
+            if ("$phase".Trim() -in @("Succeeded", "Failed")) {
+                $finished = $true
+                break
+            }
+
+            Start-Sleep -Seconds 2
+        }
+
+        if (-not $finished) {
+            return [PSCustomObject]@{
+                Success = $false
+                Arn     = $null
+            }
+        }
+
+        $logs = & kubectl logs $podName `
+            -n $Namespace `
+            2>$null
+
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($logs -join "`n"))) {
+            return [PSCustomObject]@{
+                Success = $false
+                Arn     = $null
+            }
+        }
+
+        try {
+            $identity = ($logs -join "`n") | ConvertFrom-Json
+
+            return [PSCustomObject]@{
+                Success = -not [string]::IsNullOrWhiteSpace([string]$identity.Arn)
+                Arn     = [string]$identity.Arn
+            }
+        }
+        catch {
+            return [PSCustomObject]@{
+                Success = $false
+                Arn     = $null
+            }
+        }
+    }
+    finally {
+        & kubectl delete pod $podName `
+            -n $Namespace `
+            --ignore-not-found=true `
+            --wait=false `
+            2>$null | Out-Null
+    }
+}
+
+function Test-AwsWorkloadPreflight {
+    param(
+        [string]$Namespace,
+        [string]$DeploymentName,
+        [string]$AwsRegion,
+        [string]$ClusterName
+    )
+
+    $mode = Get-DeploymentAwsCredentialMode `
+        -Namespace $Namespace `
+        -DeploymentName $DeploymentName
+
+    if (-not $mode) {
+        throw "Não foi possível identificar o modo de credenciais AWS do $DeploymentName."
+    }
+
+    if ($mode.Mode -eq "Secret") {
+        Write-Warn "$DeploymentName usa o Secret aws-credentials. Se a identidade tiver explicit deny, o SDK AWS também será negado."
+        return $mode
+    }
+
+    Write-Host "$DeploymentName usa NodeRole/IMDS." -ForegroundColor Yellow
+
+    $context = Get-WorkloadNodeAwsContext `
+        -Namespace $Namespace `
+        -DeploymentName $DeploymentName `
+        -AwsRegion $AwsRegion `
+        -ClusterName $ClusterName
+
+    if (-not $context) {
+        Write-Warn "Não foi possível obter os dados do node de $DeploymentName."
+        return $mode
+    }
+
+    Write-Host "Node:      $($context.NodeName)"
+    Write-Host "Instância: $($context.InstanceId)"
+
+    if (-not [string]::IsNullOrWhiteSpace($context.NodeRole)) {
+        Write-Host "NodeRole:  $($context.NodeRole)"
+    }
+
+    if ($null -ne $context.HopLimit) {
+        Write-Host "IMDS HopLimit: $($context.HopLimit)"
+    }
+    else {
+        Write-Warn "Não consegui consultar o HopLimit da instância."
+    }
+
+    if ($null -ne $context.HopLimit -and [int]$context.HopLimit -lt 2) {
+        Write-Warn "HopLimit=$($context.HopLimit). Pods comuns podem não alcançar o IMDSv2."
+
+        Write-Host "Confirmando a LabRole diretamente pela rede do node..." -ForegroundColor Yellow
+
+        $probe = Test-NodeRoleFromHostNetwork `
+            -Namespace $Namespace `
+            -NodeName $context.NodeName `
+            -AwsRegion $AwsRegion
+
+        if ($probe.Success) {
+            Write-Ok "A role do node está disponível via IMDS: $($probe.Arn)"
+
+            throw "$DeploymentName usa NodeRole, mas o HopLimit do IMDS é $($context.HopLimit). A LabRole funciona no node, porém o Pod comum não consegue obter credenciais. Configure http_put_response_hop_limit = 2 no Launch Template/EC2 e reinicie o workload."
+        }
+
+        throw "$DeploymentName usa NodeRole, mas o HopLimit do IMDS é $($context.HopLimit) e o teste da role via hostNetwork também falhou."
+    }
+
+    if ($null -ne $context.HopLimit -and [int]$context.HopLimit -ge 2) {
+        Write-Ok "$DeploymentName está em modo NodeRole e o IMDS HopLimit permite acesso a partir do Pod."
+    }
+
+    return $mode
+}
+
+function Get-AwsFailureSummary {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $null
+    }
+
+    if ($Text -match "NoCredentialProviders|no valid providers in chain") {
+        return "NO_CREDENTIALS"
+    }
+
+    if ($Text -match "explicit deny|AccessDenied") {
+        return "ACCESS_DENIED"
+    }
+
+    if ($Text -match "ExpiredToken|RequestExpired|InvalidClientTokenId") {
+        return "EXPIRED"
+    }
+
+    return $null
+}
+
 try {
     if ($AtualizarKubeconfig) {
         Write-Section "ATUALIZANDO KUBECONFIG"
@@ -381,6 +751,22 @@ try {
         -not $routes.ContainsKey("Evaluation")
     ) {
         throw "O fluxo completo precisa das rotas de Auth, Flag, Targeting e Evaluation."
+    }
+
+    Write-Section "PRECHECK AWS RUNTIME / LABROLE"
+
+    $evaluationAwsMode = Test-AwsWorkloadPreflight `
+        -Namespace $Namespace `
+        -DeploymentName "evaluation-service" `
+        -AwsRegion $AwsRegion `
+        -ClusterName $ClusterName
+
+    if ($routes.ContainsKey("Analytics")) {
+        $analyticsAwsMode = Test-AwsWorkloadPreflight `
+            -Namespace $Namespace `
+            -DeploymentName "analytics-service" `
+            -AwsRegion $AwsRegion `
+            -ClusterName $ClusterName
     }
 
     Write-Section "1 - CRIANDO CHAVE DE API"
@@ -735,7 +1121,7 @@ try {
         throw "AWS_SQS_URL não encontrada no ConfigMap app-configmap."
     }
 
-    Write-Host "Validando fila SQS..." -ForegroundColor Yellow
+    Write-Host "Validando leitura da fila SQS..." -ForegroundColor Yellow
 
     $sqsAttributesJson = & aws sqs get-queue-attributes `
         --queue-url $sqsUrl `
@@ -747,16 +1133,17 @@ try {
         --output json `
         2>$null
 
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($sqsAttributesJson -join "`n"))) {
-        throw "Não foi possível consultar a fila SQS."
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($sqsAttributesJson -join "`n"))) {
+        $sqsAttributes = ($sqsAttributesJson -join "`n") | ConvertFrom-Json
+
+        Write-Ok "Fila SQS acessível para leitura."
+        Write-Host "Mensagens disponíveis: $($sqsAttributes.Attributes.ApproximateNumberOfMessages)"
+        Write-Host "Mensagens em processamento: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesNotVisible)"
+        Write-Host "Mensagens atrasadas: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesDelayed)"
     }
-
-    $sqsAttributes = ($sqsAttributesJson -join "`n") | ConvertFrom-Json
-
-    Write-Ok "Fila SQS acessível."
-    Write-Host "Mensagens disponíveis: $($sqsAttributes.Attributes.ApproximateNumberOfMessages)"
-    Write-Host "Mensagens em processamento: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesNotVisible)"
-    Write-Host "Mensagens atrasadas: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesDelayed)"
+    else {
+        Write-Warn "A AWS CLI local não conseguiu consultar os atributos da SQS. O envio pelo evaluation-service ainda será validado pelos logs do workload."
+    }
 
     $sqsTestUser = "sqs-test-" + (Get-Date -Format "yyyyMMddHHmmss")
 
@@ -765,6 +1152,10 @@ try {
         -IngressPath $evaluationRoute.Path `
         -Endpoint "/evaluate?user_id=$sqsTestUser&flag_name=$FlagName"
 
+    # Marca o instante da chamada. Assim não confundimos erros antigos do Evaluation
+    # com o envio que está sendo testado agora.
+    $sqsLogSince = (Get-Date).ToUniversalTime().AddSeconds(-2).ToString("yyyy-MM-ddTHH:mm:ssZ")
+
     $sqsEvaluationResult = Invoke-Endpoint `
         -Name "Evaluation - Gerar evento para SQS" `
         -Method "GET" `
@@ -772,10 +1163,70 @@ try {
         -ExpectedStatus @(200)
 
     if (-not $sqsEvaluationResult.Success) {
-        throw "Não foi possível gerar o evento de teste para a SQS."
+        throw "Não foi possível executar a avaliação que deveria produzir o evento SQS."
     }
 
-    Write-Ok "Evento de avaliação gerado para o fluxo SQS."
+    Write-Host "Aguardando o envio assíncrono para a SQS..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 6
+
+    $sqsEvaluationLogs = & kubectl logs `
+        -n $Namespace `
+        deployment/evaluation-service `
+        "--since-time=$sqsLogSince" `
+        2>$null
+
+    $sqsEvaluationLogText = ($sqsEvaluationLogs -join "`n")
+    $sqsFailure = Get-AwsFailureSummary -Text $sqsEvaluationLogText
+
+    if ($sqsEvaluationLogText -match "Erro ao enviar mensagem para SQS") {
+        if ($sqsFailure -eq "NO_CREDENTIALS") {
+            $context = Get-WorkloadNodeAwsContext `
+                -Namespace $Namespace `
+                -DeploymentName "evaluation-service" `
+                -AwsRegion $AwsRegion `
+                -ClusterName $ClusterName
+
+            $hop = if ($context -and $null -ne $context.HopLimit) {
+                $context.HopLimit
+            }
+            else {
+                "desconhecido"
+            }
+
+            throw "O /evaluate respondeu 200, mas o evento NÃO foi enviado para a SQS. O evaluation-service retornou NoCredentialProviders. Modo esperado: NodeRole/IMDS. HopLimit atual: $hop."
+        }
+
+        if ($sqsFailure -eq "ACCESS_DENIED") {
+            throw "O /evaluate respondeu 200, mas o evento NÃO foi enviado para a SQS. A AWS retornou AccessDenied/explicit deny para o evaluation-service."
+        }
+
+        if ($sqsFailure -eq "EXPIRED") {
+            throw "O /evaluate respondeu 200, mas o evento NÃO foi enviado para a SQS porque a credencial AWS está expirada/inválida."
+        }
+
+        throw "O /evaluate respondeu 200, mas o evaluation-service registrou erro ao enviar a mensagem para a SQS."
+    }
+
+    if ($sqsFailure) {
+        throw "O evaluation-service registrou falha AWS durante o teste SQS: $sqsFailure."
+    }
+
+    Write-Ok "Evaluation respondeu 200 e não registrou erro no SendMessage da SQS."
+
+    $analyticsSqsLogs = & kubectl logs `
+        -n $Namespace `
+        deployment/analytics-service `
+        "--since-time=$sqsLogSince" `
+        2>$null
+
+    $analyticsSqsLogText = ($analyticsSqsLogs -join "`n")
+
+    if ($analyticsSqsLogText -match "Recebidas|Processando mensagem") {
+        Write-Ok "Analytics registrou consumo/processamento de mensagem da SQS."
+    }
+    else {
+        Write-Warn "Ainda não encontrei consumo da mensagem nos logs do Analytics. A persistência no DynamoDB fará a validação ponta a ponta."
+    }
 
     Write-Section "8 - TESTANDO ANALYTICS E DYNAMODB"
 
@@ -895,7 +1346,7 @@ try {
 
     $relevantAnalyticsLogs = @(
         $analyticsLogs |
-            Select-String -Pattern "Recebidas|Processando|DynamoDB|salvo"
+            Select-String -Pattern "Recebidas|Processando|DynamoDB|salvo|Erro|ERROR|AccessDenied|NoCredentialProviders|ExpiredToken|RequestExpired"
     )
 
     if ($relevantAnalyticsLogs.Count -gt 0) {
@@ -908,7 +1359,59 @@ try {
     }
 
     if (-not $dynamoPersisted) {
-        throw "O DynamoDB não recebeu novo registro dentro do tempo esperado."
+        $evaluationRecentLogs = & kubectl logs `
+            -n $Namespace `
+            deployment/evaluation-service `
+            --since=120s `
+            2>$null
+
+        $evaluationRecentText = ($evaluationRecentLogs -join "`n")
+        $evaluationAwsFailure = Get-AwsFailureSummary -Text $evaluationRecentText
+        $analyticsLogText = ($analyticsLogs -join "`n")
+        $analyticsAwsFailure = Get-AwsFailureSummary -Text $analyticsLogText
+
+        if ($evaluationRecentText -match "Erro ao enviar mensagem para SQS") {
+            if ($evaluationAwsFailure -eq "NO_CREDENTIALS") {
+                throw "O DynamoDB não recebeu registro porque o evaluation-service não conseguiu credenciais AWS para enviar o evento à SQS (NoCredentialProviders)."
+            }
+
+            if ($evaluationAwsFailure -eq "ACCESS_DENIED") {
+                throw "O DynamoDB não recebeu registro porque a AWS negou o SendMessage do evaluation-service para a SQS."
+            }
+
+            throw "O DynamoDB não recebeu registro porque o evaluation-service falhou antes, durante o envio do evento para a SQS."
+        }
+
+        if ($analyticsAwsFailure -eq "NO_CREDENTIALS") {
+            $analyticsContext = Get-WorkloadNodeAwsContext `
+                -Namespace $Namespace `
+                -DeploymentName "analytics-service" `
+                -AwsRegion $AwsRegion `
+                -ClusterName $ClusterName
+
+            $hop = if ($analyticsContext -and $null -ne $analyticsContext.HopLimit) {
+                $analyticsContext.HopLimit
+            }
+            else {
+                "desconhecido"
+            }
+
+            throw "A mensagem pode ter chegado à SQS, mas o analytics-service não conseguiu credenciais AWS. NoCredentialProviders. HopLimit do node do Analytics: $hop."
+        }
+
+        if ($analyticsAwsFailure -eq "ACCESS_DENIED") {
+            throw "O Analytics recebeu uma identidade AWS, mas houve AccessDenied ao consumir a SQS ou gravar no DynamoDB."
+        }
+
+        if ($analyticsAwsFailure -eq "EXPIRED") {
+            throw "O Analytics está usando credencial AWS expirada/inválida."
+        }
+
+        if ($analyticsLogText -match "Recebidas|Processando mensagem") {
+            throw "O Analytics recebeu/processou a mensagem, mas nenhum novo item apareceu no DynamoDB dentro do tempo esperado. Verifique erros de PutItem nos logs acima."
+        }
+
+        throw "Nenhum novo registro apareceu no DynamoDB e não encontrei erro AWS explícito. Verifique se o Analytics realmente consumiu a mensagem da SQS."
     }
 
     Write-Ok "Analytics consumiu o fluxo e o DynamoDB recebeu novo registro."
@@ -924,7 +1427,7 @@ try {
     Write-Host ""
     Write-Host "Infraestrutura validada:"
     Write-Host "  Redis    -> PONG / Cache"
-    Write-Host "  SQS      -> fila acessível / evento gerado"
+    Write-Host "  SQS      -> SendMessage validado pelos logs do Evaluation"
     Write-Host "  Analytics -> worker saudável"
     Write-Host "  DynamoDB -> tabela ACTIVE / novo registro persistido"
 }
