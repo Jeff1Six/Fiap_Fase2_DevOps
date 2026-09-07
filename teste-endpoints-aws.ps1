@@ -507,61 +507,42 @@ try {
 
     Write-Section "5 - TESTANDO EVALUATION"
 
-    # O evaluation-service chama internamente o flag-service.
-    # Por isso ele precisa usar a mesma API Key válida que acabou
-    # de ser criada no auth-service neste teste.
-    Write-Host "Atualizando SERVICE_API_KEY do evaluation-service..." -ForegroundColor Yellow
+    # Usa exatamente a API Key criada no passo 1.
+    # Ela é salva em um Secret runtime separado, que não fica no Git.
+    Write-Host "Configurando API Key runtime do evaluation-service..." -ForegroundColor Yellow
 
-    $encodedApiKey = [Convert]::ToBase64String(
-        [Text.Encoding]::UTF8.GetBytes($ApiKey)
-    )
+    $runtimeSecretName = "evaluation-api-key"
 
-    $secretPatch = @{
-        data = @{
-            SERVICE_API_KEY = $encodedApiKey
-        }
-    } | ConvertTo-Json -Compress
-
-    # No PowerShell/Windows, passar JSON direto em -p pode quebrar as aspas.
-    # Usamos um arquivo temporário para preservar o JSON corretamente.
-    $patchFile = Join-Path $env:TEMP "app-secrets-service-api-key-patch.json"
-
-    try {
-        [System.IO.File]::WriteAllText(
-            $patchFile,
-            $secretPatch,
-            [System.Text.UTF8Encoding]::new($false)
-        )
-
-        & kubectl patch secret app-secrets `
-            -n $Namespace `
-            --type=merge `
-            --patch-file $patchFile | Out-Null
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Não foi possível atualizar a SERVICE_API_KEY no Secret app-secrets."
-        }
-    }
-    finally {
-        Remove-Item $patchFile -ErrorAction SilentlyContinue
-    }
-
-    # Variáveis vindas de Secret só são recarregadas quando o Pod é recriado.
-    & kubectl delete pod `
+    $secretYaml = & kubectl create secret generic $runtimeSecretName `
         -n $Namespace `
-        -l app=evaluation-service `
-        --ignore-not-found=true | Out-Null
+        --from-literal="SERVICE_API_KEY=$ApiKey" `
+        --dry-run=client `
+        -o yaml
+
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($secretYaml -join "`n"))) {
+        throw "Não foi possível gerar o Secret runtime '$runtimeSecretName'."
+    }
+
+    $secretYaml | & kubectl apply -f - | Out-Null
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Não foi possível recriar o Pod do evaluation-service."
+        throw "Não foi possível criar/atualizar o Secret runtime '$runtimeSecretName'."
     }
 
-    Write-Host "Aguardando o evaluation-service ficar pronto novamente..." -ForegroundColor Yellow
+    # O Deployment lê SERVICE_API_KEY do Secret evaluation-api-key.
+    # Reinicia somente o evaluation-service para carregar a chave nova.
+    & kubectl rollout restart `
+        deployment/evaluation-service `
+        -n $Namespace | Out-Null
 
-    & kubectl wait `
-        --for=condition=Ready `
-        pod `
-        -l app=evaluation-service `
+    if ($LASTEXITCODE -ne 0) {
+        throw "Não foi possível reiniciar o evaluation-service."
+    }
+
+    Write-Host "Aguardando rollout do evaluation-service..." -ForegroundColor Yellow
+
+    & kubectl rollout status `
+        deployment/evaluation-service `
         -n $Namespace `
         --timeout=120s | Out-Null
 
@@ -569,10 +550,22 @@ try {
         throw "O evaluation-service não ficou Ready dentro do tempo esperado."
     }
 
-    Write-Ok "SERVICE_API_KEY atualizada no evaluation-service."
+    # Confirma, sem imprimir a chave, que o Pod recebeu a mesma chave criada no teste.
+    $podApiKey = & kubectl exec `
+        -n $Namespace `
+        deployment/evaluation-service `
+        -- printenv SERVICE_API_KEY 2>$null
 
-    # O Pod pode estar Ready antes de o EndpointSlice/NGINX perceber o novo endpoint.
-    # Aguarda o Service publicar um endpoint pronto antes de testar externamente.
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($podApiKey)) {
+        throw "SERVICE_API_KEY não foi encontrada no Pod do evaluation-service."
+    }
+
+    if (($podApiKey -join "`n").Trim() -ne $ApiKey.Trim()) {
+        throw "O evaluation-service não recebeu a API Key criada neste teste."
+    }
+
+    Write-Ok "Evaluation configurado com a API Key criada neste teste."
+
     Write-Host "Aguardando endpoint do evaluation-service ficar disponível..." -ForegroundColor Yellow
 
     $endpointReady = $false
@@ -596,7 +589,6 @@ try {
         throw "O endpoint do evaluation-service não ficou disponível no Kubernetes."
     }
 
-    # Pequena folga para o ingress-nginx atualizar o upstream.
     Start-Sleep -Seconds 3
 
     $evaluationRoute = $routes["Evaluation"]
@@ -619,8 +611,8 @@ try {
             break
         }
 
-        if ($evaluationResult.StatusCode -eq 503) {
-            Write-Warn "Evaluation retornou 503. Aguardando atualização do upstream... tentativa $attempt de 5"
+        if ($evaluationResult.StatusCode -in @(502, 503)) {
+            Write-Warn "Evaluation retornou HTTP $($evaluationResult.StatusCode). Tentativa $attempt de 5."
             Start-Sleep -Seconds 3
             continue
         }
