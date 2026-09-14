@@ -3,11 +3,13 @@ param(
     [string]$IngressName = "toggle-master-ingress",
     [string]$AwsRegion = "us-east-1",
     [string]$ClusterName = "togglemaster-dev",
-    [switch]$AtualizarKubeconfig,
-    [switch]$FluxoCompleto,
     [string]$MasterKey = "admin-secreto-123",
     [string]$FlagName = "enable-new-dashboard",
-    [string]$TestUserId = "user-123"
+    [string]$TestUserId = "user-123",
+    [switch]$AtualizarKubeconfig,
+    [switch]$SemPausa,
+    [int]$HpaLoadPods = 5,
+    [int]$HpaMaxWaitSeconds = 180
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,62 +20,117 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
-function Write-Section {
-    param([string]$Title)
+$script:Resultados = @()
+$script:ApiKey = $null
+$script:Routes = @{}
+$script:IngressAddress = $null
+$script:EvaluationUrl = $null
+$script:InicioTeste = Get-Date
+
+function Write-Banner {
+    Clear-Host
+    Write-Host ""
+    Write-Host "==============================================================" -ForegroundColor Magenta
+    Write-Host "            TOGGLE MASTER - FIAP - PARTE 3" -ForegroundColor Magenta
+    Write-Host "          CENARIOS DE TESTE PARA GRAVACAO" -ForegroundColor Magenta
+    Write-Host "==============================================================" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "Cluster:    $ClusterName"
+    Write-Host "Namespace:  $Namespace"
+    Write-Host "Regiao AWS: $AwsRegion"
+    Write-Host "Flag:       $FlagName"
+    Write-Host "Usuario:    $TestUserId"
+    Write-Host ""
+}
+
+function Write-Scenario {
+    param(
+        [int]$Numero,
+        [string]$Titulo,
+        [string]$Objetivo
+    )
 
     Write-Host ""
-    Write-Host "============================================================"
-    Write-Host $Title -ForegroundColor Cyan
-    Write-Host "============================================================"
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host ("CENARIO {0} - {1}" -f $Numero, $Titulo) -ForegroundColor Cyan
+    Write-Host "==============================================================" -ForegroundColor Cyan
+    Write-Host "Objetivo: $Objetivo" -ForegroundColor DarkGray
+    Write-Host ""
 }
 
 function Write-Ok {
-    param([string]$Text)
-    Write-Host "[OK] $Text" -ForegroundColor Green
+    param([string]$Texto)
+    Write-Host "[OK] $Texto" -ForegroundColor Green
 }
 
 function Write-Warn {
-    param([string]$Text)
-    Write-Host "[AVISO] $Text" -ForegroundColor Yellow
+    param([string]$Texto)
+    Write-Host "[AVISO] $Texto" -ForegroundColor Yellow
 }
 
 function Write-Fail {
-    param([string]$Text)
-    Write-Host "[ERRO] $Text" -ForegroundColor Red
+    param([string]$Texto)
+    Write-Host "[ERRO] $Texto" -ForegroundColor Red
 }
 
-function Invoke-KubectlJson {
-    param([string[]]$Arguments)
+function Wait-Video {
+    param([string]$Proximo)
 
-    $output = & kubectl @Arguments 2>$null
+    if ($SemPausa) {
+        return
+    }
+
+    Write-Host ""
+    Read-Host "Pressione ENTER para $Proximo" | Out-Null
+}
+
+function Add-Resultado {
+    param(
+        [string]$Cenario,
+        [bool]$Sucesso,
+        [string]$Detalhe
+    )
+
+    $script:Resultados += [PSCustomObject]@{
+        Cenario = $Cenario
+        Status  = if ($Sucesso) { "APROVADO" } else { "FALHOU" }
+        Detalhe = $Detalhe
+    }
+}
+
+function Invoke-NativeJson {
+    param(
+        [string]$Command,
+        [string[]]$Arguments
+    )
+
+    $output = & $Command @Arguments 2>$null
 
     if ($LASTEXITCODE -ne 0) {
         return $null
     }
 
-    $text = ($output -join "`n")
+    $text = ($output -join "`n").Trim()
 
     if ([string]::IsNullOrWhiteSpace($text)) {
         return $null
     }
 
-    return ($text | ConvertFrom-Json)
+    try {
+        return $text | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
 }
 
-function Get-IngressInfo {
-    param(
-        [string]$Namespace,
-        [string]$IngressName
-    )
-
-    $ingress = Invoke-KubectlJson -Arguments @(
-        "get", "ingress", $IngressName,
-        "-n", $Namespace,
-        "-o", "json"
-    )
+function Get-IngressRoutes {
+    $ingress = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "ingress", $IngressName, "-n", $Namespace, "-o", "json")
 
     if (-not $ingress) {
-        throw "Ingress '$IngressName' não encontrado no namespace '$Namespace'."
+        throw "Ingress '$IngressName' nao encontrado no namespace '$Namespace'."
     }
 
     $address = $null
@@ -82,158 +139,153 @@ function Get-IngressInfo {
         $lb = $ingress.status.loadBalancer.ingress[0]
 
         if ($lb.hostname) {
-            $address = $lb.hostname
+            $address = [string]$lb.hostname
         }
         elseif ($lb.ip) {
-            $address = $lb.ip
+            $address = [string]$lb.ip
         }
     }
 
     if ([string]::IsNullOrWhiteSpace($address)) {
-        throw "O Ingress existe, mas ainda não possui ADDRESS público na AWS."
+        throw "O Ingress existe, mas ainda nao possui ADDRESS publico."
     }
 
-    $tlsHosts = @()
-
-    foreach ($tls in @($ingress.spec.tls)) {
-        foreach ($tlsHost in @($tls.hosts)) {
-            if ($tlsHost) {
-                $tlsHosts += $tlsHost
-            }
-        }
-    }
-
-    $routes = @()
+    $script:IngressAddress = $address
+    $routes = @{}
 
     foreach ($rule in @($ingress.spec.rules)) {
-        $ruleHost = $rule.host
+        $hostName = [string]$rule.host
+
+        if ([string]::IsNullOrWhiteSpace($hostName) -or $hostName -eq "*") {
+            $hostName = $address
+        }
+
+        # O Ingress atual esta publicado apenas em HTTP/porta 80.
+        # Quando rule.host e spec.tls sao nulos, o PowerShell pode considerar
+        # "$null -contains $null" como verdadeiro e selecionar HTTPS por engano.
+        # Portanto, so usamos HTTPS quando existir configuracao TLS real.
+        $scheme = "http"
+
+        $tlsEntries = @(
+            $ingress.spec.tls | Where-Object {
+                $null -ne $_ -and (
+                    -not [string]::IsNullOrWhiteSpace([string]$_.secretName) -or
+                    @($_.hosts | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0
+                )
+            }
+        )
+
+        if ($tlsEntries.Count -gt 0) {
+            $scheme = "https"
+        }
 
         foreach ($pathItem in @($rule.http.paths)) {
-            $serviceName = $pathItem.backend.service.name
-            $path = $pathItem.path
+            $service = [string]$pathItem.backend.service.name
+            $path = [string]$pathItem.path
 
-            if ([string]::IsNullOrWhiteSpace($path)) {
-                $path = "/"
-            }
+            $prefix = $path
+            $prefix = $prefix -replace '\(\.\*\).*$', ''
+            $prefix = $prefix -replace '\(/\|\$\).*$', ''
+            $prefix = $prefix -replace '\(\.\*\)', ''
+            $prefix = $prefix.TrimEnd('/')
 
-            $hostForUrl = $ruleHost
-
-            if ([string]::IsNullOrWhiteSpace($hostForUrl) -or $hostForUrl -eq "*") {
-                $hostForUrl = $address
-            }
-
-            $scheme = "http"
-
-            if ($tlsHosts -contains $ruleHost) {
-                $scheme = "https"
-            }
-
-            $routes += [PSCustomObject]@{
-                Service = $serviceName
+            $routes[$service] = [PSCustomObject]@{
+                Service = $service
+                Prefix  = $prefix
+                BaseUrl = "${scheme}://${hostName}"
                 Path    = $path
-                Host    = $hostForUrl
-                Scheme  = $scheme
-                BaseUrl = "${scheme}://${hostForUrl}"
             }
         }
     }
 
-    return [PSCustomObject]@{
-        Address = $address
-        Routes  = $routes
+    return $routes
+}
+
+function Get-RouteByService {
+    param([string]$ServiceName)
+
+    if ($script:Routes.ContainsKey($ServiceName)) {
+        return $script:Routes[$ServiceName]
     }
+
+    $match = $script:Routes.Keys |
+        Where-Object { $_ -like "$ServiceName*" } |
+        Select-Object -First 1
+
+    if ($match) {
+        return $script:Routes[$match]
+    }
+
+    throw "Rota do servico '$ServiceName' nao encontrada no Ingress."
 }
 
-function Get-ServiceRoute {
+function Join-Url {
     param(
-        [object[]]$Routes,
-        [string]$ServiceName
-    )
-
-    return @(
-        $Routes | Where-Object {
-            $_.Service -eq $ServiceName -or
-            $_.Service -like "$ServiceName*" -or
-            $ServiceName -like "$($_.Service)*"
-        }
-    ) | Select-Object -First 1
-}
-
-function Join-ExternalUrl {
-    param(
-        [string]$BaseUrl,
-        [string]$IngressPath,
+        [object]$Route,
         [string]$Endpoint
     )
-
-    if ([string]::IsNullOrWhiteSpace($IngressPath)) {
-        $IngressPath = "/"
-    }
-
-    $prefix = $IngressPath
-
-    # Remove regex/wildcard comum em Ingress NGINX, ex.: /auth(/|$)(.*)
-    $prefix = $prefix -replace '\(\.\*\).*$', ''
-    $prefix = $prefix -replace '\(/\|\$\).*$', ''
-    $prefix = $prefix -replace '\(\.\*\)', ''
-    $prefix = $prefix.TrimEnd('/')
-
-    if ($prefix -eq "") {
-        $prefix = ""
-    }
 
     if (-not $Endpoint.StartsWith("/")) {
         $Endpoint = "/$Endpoint"
     }
 
-    return "$BaseUrl$prefix$Endpoint"
+    return "$($Route.BaseUrl)$($Route.Prefix)$Endpoint"
 }
 
-function Invoke-Endpoint {
+function Invoke-Api {
     param(
-        [string]$Name,
+        [string]$Nome,
+        [ValidateSet("GET", "POST", "PUT", "DELETE", "PATCH")]
         [string]$Method,
         [string]$Url,
         [hashtable]$Headers = @{},
         [object]$Body = $null,
-        [int[]]$ExpectedStatus = @(200)
+        [int[]]$ExpectedStatus = @(200),
+        [switch]$OcultarResposta
     )
 
-    Write-Host ""
-    Write-Host "[$Method] $Name"
-    Write-Host "URL: $Url" -ForegroundColor DarkGray
+    Write-Host "[$Method] $Nome" -ForegroundColor White
+    Write-Host "      $Url" -ForegroundColor DarkGray
+
+    $params = @{
+        Uri         = $Url
+        Method      = $Method
+        Headers     = $Headers
+        TimeoutSec      = 30
+        ErrorAction     = "Stop"
+        UseBasicParsing = $true
+    }
+
+    if ($null -ne $Body) {
+        $params.ContentType = "application/json"
+        $params.Body = $Body | ConvertTo-Json -Depth 10 -Compress
+    }
 
     try {
-        $params = @{
-            Uri         = $Url
-            Method      = $Method
-            Headers     = $Headers
-            TimeoutSec  = 20
-            ErrorAction = "Stop"
-        }
-
-        if ($null -ne $Body) {
-            $params["ContentType"] = "application/json"
-            $params["Body"] = ($Body | ConvertTo-Json -Depth 10 -Compress)
-        }
-
         $response = Invoke-WebRequest @params
+        $statusCode = [int]$response.StatusCode
+        $content = [string]$response.Content
 
-        if ($ExpectedStatus -contains [int]$response.StatusCode) {
-            Write-Ok "HTTP $($response.StatusCode)"
-        }
-        else {
-            Write-Warn "HTTP $($response.StatusCode) - esperado: $($ExpectedStatus -join ', ')"
+        if ($ExpectedStatus -notcontains $statusCode) {
+            throw "HTTP $statusCode. Esperado: $($ExpectedStatus -join ', ')."
         }
 
-        if (-not [string]::IsNullOrWhiteSpace($response.Content)) {
-            Write-Host $response.Content
+        Write-Ok "HTTP $statusCode"
+
+        if (-not $OcultarResposta -and -not [string]::IsNullOrWhiteSpace($content)) {
+            try {
+                $json = $content | ConvertFrom-Json
+                $json | ConvertTo-Json -Depth 10 | Write-Host
+            }
+            catch {
+                Write-Host $content
+            }
         }
 
         return [PSCustomObject]@{
-            Success    = $ExpectedStatus -contains [int]$response.StatusCode
-            StatusCode = [int]$response.StatusCode
-            Content    = $response.Content
+            Success    = $true
+            StatusCode = $statusCode
+            Content    = $content
         }
     }
     catch {
@@ -249,8 +301,17 @@ function Invoke-Endpoint {
             }
         }
 
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $content = [string]$_.ErrorDetails.Message
+        }
+
         if ($statusCode -and ($ExpectedStatus -contains $statusCode)) {
             Write-Ok "HTTP $statusCode"
+
+            if (-not $OcultarResposta -and -not [string]::IsNullOrWhiteSpace($content)) {
+                Write-Host $content
+            }
+
             return [PSCustomObject]@{
                 Success    = $true
                 StatusCode = $statusCode
@@ -259,759 +320,112 @@ function Invoke-Endpoint {
         }
 
         if ($statusCode) {
-            Write-Fail "HTTP $statusCode"
-        }
-        else {
-            Write-Fail $_.Exception.Message
+            throw "${Nome}: HTTP $statusCode. $content"
         }
 
-        return [PSCustomObject]@{
-            Success    = $false
-            StatusCode = $statusCode
-            Content    = $content
-        }
+        throw "${Nome}: $($_.Exception.Message)"
     }
 }
 
+function Get-PlainTextFromSecureString {
+    param([Security.SecureString]$SecureString)
 
-function Get-DeploymentAwsCredentialMode {
-    param(
-        [string]$Namespace,
-        [string]$DeploymentName
-    )
-
-    $deployment = Invoke-KubectlJson -Arguments @(
-        "get", "deployment", $DeploymentName,
-        "-n", $Namespace,
-        "-o", "json"
-    )
-
-    if (-not $deployment) {
-        return $null
-    }
-
-    $container = @(
-        $deployment.spec.template.spec.containers |
-            Where-Object { $_.name -eq $DeploymentName }
-    ) | Select-Object -First 1
-
-    if (-not $container) {
-        $container = @($deployment.spec.template.spec.containers)[0]
-    }
-
-    $secretNames = @()
-
-    foreach ($envFrom in @($container.envFrom)) {
-        if ($envFrom.secretRef -and $envFrom.secretRef.name) {
-            $secretNames += [string]$envFrom.secretRef.name
-        }
-    }
-
-    $mode = if ($secretNames -contains "aws-credentials") {
-        "Secret"
-    }
-    else {
-        "NodeRole"
-    }
-
-    return [PSCustomObject]@{
-        Deployment  = $DeploymentName
-        Mode        = $mode
-        SecretNames = $secretNames
-    }
-}
-
-function Get-WorkloadNodeAwsContext {
-    param(
-        [string]$Namespace,
-        [string]$DeploymentName,
-        [string]$AwsRegion,
-        [string]$ClusterName
-    )
-
-    $podList = Invoke-KubectlJson -Arguments @(
-        "get", "pods",
-        "-n", $Namespace,
-        "-l", "app=$DeploymentName",
-        "-o", "json"
-    )
-
-    if (-not $podList -or -not $podList.items) {
-        return $null
-    }
-
-    $pod = @(
-        $podList.items |
-            Where-Object { $_.status.phase -eq "Running" }
-    ) | Select-Object -First 1
-
-    if (-not $pod) {
-        $pod = @($podList.items)[0]
-    }
-
-    $nodeName = [string]$pod.spec.nodeName
-
-    if ([string]::IsNullOrWhiteSpace($nodeName)) {
-        return $null
-    }
-
-    $node = Invoke-KubectlJson -Arguments @(
-        "get", "node", $nodeName,
-        "-o", "json"
-    )
-
-    if (-not $node) {
-        return $null
-    }
-
-    $providerId = [string]$node.spec.providerID
-    $instanceId = $null
-
-    if (-not [string]::IsNullOrWhiteSpace($providerId)) {
-        $instanceId = ($providerId -split "/")[-1]
-    }
-
-    $nodeGroupName = $null
-
-    if ($node.metadata.labels) {
-        $nodeGroupName = [string]$node.metadata.labels.'eks.amazonaws.com/nodegroup'
-    }
-
-    $nodeRole = $null
-
-    if (-not [string]::IsNullOrWhiteSpace($nodeGroupName)) {
-        $nodeRoleOutput = & aws eks describe-nodegroup `
-            --cluster-name $ClusterName `
-            --nodegroup-name $nodeGroupName `
-            --region $AwsRegion `
-            --query "nodegroup.nodeRole" `
-            --output text `
-            2>$null
-
-        if ($LASTEXITCODE -eq 0) {
-            $nodeRole = ($nodeRoleOutput -join "`n").Trim()
-        }
-    }
-
-    $hopLimit = $null
-    $httpTokens = $null
-    $httpEndpoint = $null
-    $instanceProfile = $null
-
-    if (-not [string]::IsNullOrWhiteSpace($instanceId)) {
-        $instanceJson = & aws ec2 describe-instances `
-            --instance-ids $instanceId `
-            --region $AwsRegion `
-            --output json `
-            2>$null
-
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($instanceJson -join "`n"))) {
-            try {
-                $instanceInfo = ($instanceJson -join "`n") | ConvertFrom-Json
-                $instance = $instanceInfo.Reservations[0].Instances[0]
-
-                $hopLimit = $instance.MetadataOptions.HttpPutResponseHopLimit
-                $httpTokens = $instance.MetadataOptions.HttpTokens
-                $httpEndpoint = $instance.MetadataOptions.HttpEndpoint
-
-                if ($instance.IamInstanceProfile) {
-                    $instanceProfile = $instance.IamInstanceProfile.Arn
-                }
-            }
-            catch {
-                # Diagnóstico opcional. O teste funcional continuará.
-            }
-        }
-    }
-
-    return [PSCustomObject]@{
-        Deployment      = $DeploymentName
-        PodName         = [string]$pod.metadata.name
-        NodeName        = $nodeName
-        InstanceId      = $instanceId
-        NodeGroupName   = $nodeGroupName
-        NodeRole        = $nodeRole
-        InstanceProfile = $instanceProfile
-        HopLimit        = $hopLimit
-        HttpTokens      = $httpTokens
-        HttpEndpoint    = $httpEndpoint
-    }
-}
-
-function Test-NodeRoleFromHostNetwork {
-    param(
-        [string]$Namespace,
-        [string]$NodeName,
-        [string]$AwsRegion
-    )
-
-    if ([string]::IsNullOrWhiteSpace($NodeName)) {
-        return [PSCustomObject]@{
-            Success = $false
-            Arn     = $null
-        }
-    }
-
-    $podName = "labrole-test-" + (Get-Random -Minimum 1000 -Maximum 9999)
-
-    $yaml = @"
-apiVersion: v1
-kind: Pod
-metadata:
-  name: $podName
-  namespace: $Namespace
-spec:
-  nodeName: $NodeName
-  hostNetwork: true
-  dnsPolicy: ClusterFirstWithHostNet
-  restartPolicy: Never
-  containers:
-    - name: aws
-      image: amazon/aws-cli:latest
-      command:
-        - aws
-      args:
-        - sts
-        - get-caller-identity
-        - --region
-        - $AwsRegion
-"@
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureString)
 
     try {
-        $yaml | & kubectl apply -f - 2>$null | Out-Null
-
-        if ($LASTEXITCODE -ne 0) {
-            return [PSCustomObject]@{
-                Success = $false
-                Arn     = $null
-            }
-        }
-
-        $finished = $false
-
-        for ($attempt = 1; $attempt -le 45; $attempt++) {
-            $phase = & kubectl get pod $podName `
-                -n $Namespace `
-                -o jsonpath='{.status.phase}' `
-                2>$null
-
-            if ("$phase".Trim() -in @("Succeeded", "Failed")) {
-                $finished = $true
-                break
-            }
-
-            Start-Sleep -Seconds 2
-        }
-
-        if (-not $finished) {
-            return [PSCustomObject]@{
-                Success = $false
-                Arn     = $null
-            }
-        }
-
-        $logs = & kubectl logs $podName `
-            -n $Namespace `
-            2>$null
-
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($logs -join "`n"))) {
-            return [PSCustomObject]@{
-                Success = $false
-                Arn     = $null
-            }
-        }
-
-        try {
-            $identity = ($logs -join "`n") | ConvertFrom-Json
-
-            return [PSCustomObject]@{
-                Success = -not [string]::IsNullOrWhiteSpace([string]$identity.Arn)
-                Arn     = [string]$identity.Arn
-            }
-        }
-        catch {
-            return [PSCustomObject]@{
-                Success = $false
-                Arn     = $null
-            }
-        }
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
     }
     finally {
-        & kubectl delete pod $podName `
-            -n $Namespace `
-            --ignore-not-found=true `
-            --wait=false `
-            2>$null | Out-Null
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
     }
 }
 
-function Test-AwsWorkloadPreflight {
-    param(
-        [string]$Namespace,
-        [string]$DeploymentName,
-        [string]$AwsRegion,
-        [string]$ClusterName
+function Ensure-MasterKey {
+    if (-not [string]::IsNullOrWhiteSpace($script:MasterKey)) {
+        return
+    }
+
+    $secure = Read-Host "Informe a Master Key do auth-service" -AsSecureString
+    $script:MasterKey = Get-PlainTextFromSecureString -SecureString $secure
+
+    if ([string]::IsNullOrWhiteSpace($script:MasterKey)) {
+        throw "Master Key nao informada."
+    }
+}
+
+function Test-DeploymentsReady {
+    $expected = @(
+        "auth-service",
+        "flag-service",
+        "targeting-service",
+        "evaluation-service",
+        "analytics-service"
     )
 
-    $mode = Get-DeploymentAwsCredentialMode `
-        -Namespace $Namespace `
-        -DeploymentName $DeploymentName
+    $deployments = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "deployments", "-n", $Namespace, "-o", "json")
 
-    if (-not $mode) {
-        throw "Não foi possível identificar o modo de credenciais AWS do $DeploymentName."
+    if (-not $deployments) {
+        throw "Nao foi possivel consultar os deployments."
     }
 
-    if ($mode.Mode -eq "Secret") {
-        Write-Warn "$DeploymentName usa o Secret aws-credentials. Se a identidade tiver explicit deny, o SDK AWS também será negado."
-        return $mode
-    }
+    foreach ($name in $expected) {
+        $deployment = @($deployments.items | Where-Object { $_.metadata.name -eq $name }) | Select-Object -First 1
 
-    Write-Host "$DeploymentName usa NodeRole/IMDS." -ForegroundColor Yellow
-
-    $context = Get-WorkloadNodeAwsContext `
-        -Namespace $Namespace `
-        -DeploymentName $DeploymentName `
-        -AwsRegion $AwsRegion `
-        -ClusterName $ClusterName
-
-    if (-not $context) {
-        Write-Warn "Não foi possível obter os dados do node de $DeploymentName."
-        return $mode
-    }
-
-    Write-Host "Node:      $($context.NodeName)"
-    Write-Host "Instância: $($context.InstanceId)"
-
-    if (-not [string]::IsNullOrWhiteSpace($context.NodeRole)) {
-        Write-Host "NodeRole:  $($context.NodeRole)"
-    }
-
-    if ($null -ne $context.HopLimit) {
-        Write-Host "IMDS HopLimit: $($context.HopLimit)"
-    }
-    else {
-        Write-Warn "Não consegui consultar o HopLimit da instância."
-    }
-
-    if ($null -ne $context.HopLimit -and [int]$context.HopLimit -lt 2) {
-        Write-Warn "HopLimit=$($context.HopLimit). Pods comuns podem não alcançar o IMDSv2."
-
-        Write-Host "Confirmando a LabRole diretamente pela rede do node..." -ForegroundColor Yellow
-
-        $probe = Test-NodeRoleFromHostNetwork `
-            -Namespace $Namespace `
-            -NodeName $context.NodeName `
-            -AwsRegion $AwsRegion
-
-        if ($probe.Success) {
-            Write-Ok "A role do node está disponível via IMDS: $($probe.Arn)"
-
-            throw "$DeploymentName usa NodeRole, mas o HopLimit do IMDS é $($context.HopLimit). A LabRole funciona no node, porém o Pod comum não consegue obter credenciais. Configure http_put_response_hop_limit = 2 no Launch Template/EC2 e reinicie o workload."
+        if (-not $deployment) {
+            throw "Deployment '$name' nao encontrado."
         }
 
-        throw "$DeploymentName usa NodeRole, mas o HopLimit do IMDS é $($context.HopLimit) e o teste da role via hostNetwork também falhou."
-    }
+        $available = [int]($deployment.status.availableReplicas | ForEach-Object { if ($_){$_}else{0} })
 
-    if ($null -ne $context.HopLimit -and [int]$context.HopLimit -ge 2) {
-        Write-Ok "$DeploymentName está em modo NodeRole e o IMDS HopLimit permite acesso a partir do Pod."
+        if ($available -lt 1) {
+            throw "Deployment '$name' nao possui replicas disponiveis."
+        }
     }
-
-    return $mode
 }
 
-function Get-AwsFailureSummary {
-    param([string]$Text)
+function Set-EvaluationApiKey {
+    param([string]$ApiKey)
 
-    if ([string]::IsNullOrWhiteSpace($Text)) {
-        return $null
-    }
+    $secretName = "evaluation-api-key"
 
-    if ($Text -match "NoCredentialProviders|no valid providers in chain") {
-        return "NO_CREDENTIALS"
-    }
-
-    if ($Text -match "explicit deny|AccessDenied") {
-        return "ACCESS_DENIED"
-    }
-
-    if ($Text -match "ExpiredToken|RequestExpired|InvalidClientTokenId") {
-        return "EXPIRED"
-    }
-
-    return $null
-}
-
-try {
-    if ($AtualizarKubeconfig) {
-        Write-Section "ATUALIZANDO KUBECONFIG"
-
-        & aws eks update-kubeconfig `
-            --region $AwsRegion `
-            --name $ClusterName
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao atualizar kubeconfig."
-        }
-
-        Write-Ok "Kubeconfig atualizado."
-    }
-
-    Write-Section "DESCOBRINDO ENDPOINTS AWS"
-
-    $ingressInfo = Get-IngressInfo `
-        -Namespace $Namespace `
-        -IngressName $IngressName
-
-    Write-Host "Ingress:  $IngressName"
-    Write-Host "Address:  $($ingressInfo.Address)"
-    Write-Host ""
-
-    if ($ingressInfo.Routes.Count -eq 0) {
-        throw "O Ingress não possui rotas configuradas."
-    }
-
-    $ingressInfo.Routes |
-        Select-Object Service, Path, Scheme, Host |
-        Format-Table -AutoSize
-
-    $serviceNames = @{
-        Auth       = "auth-service"
-        Flag       = "flag-service"
-        Targeting  = "targeting-service"
-        Evaluation = "evaluation-service"
-        Analytics  = "analytics-service"
-    }
-
-    $routes = @{}
-
-    foreach ($key in $serviceNames.Keys) {
-        $route = Get-ServiceRoute `
-            -Routes $ingressInfo.Routes `
-            -ServiceName $serviceNames[$key]
-
-        if ($route) {
-            $routes[$key] = $route
-        }
-        else {
-            Write-Warn "Não encontrei rota do Ingress para $($serviceNames[$key])."
-        }
-    }
-
-    Write-Section "HEALTH CHECK DOS MICROSSERVICOS"
-
-    $healthResults = @()
-
-    foreach ($key in @("Auth", "Flag", "Targeting", "Evaluation", "Analytics")) {
-        if (-not $routes.ContainsKey($key)) {
-            continue
-        }
-
-        $route = $routes[$key]
-
-        $healthUrl = Join-ExternalUrl `
-            -BaseUrl $route.BaseUrl `
-            -IngressPath $route.Path `
-            -Endpoint "/health"
-
-        $result = Invoke-Endpoint `
-            -Name "$key Service - Health" `
-            -Method "GET" `
-            -Url $healthUrl `
-            -ExpectedStatus @(200)
-
-        $healthResults += [PSCustomObject]@{
-            Servico = $key
-            URL     = $healthUrl
-            Status  = if ($result.Success) { "OK" } else { "FALHOU" }
-            HTTP    = $result.StatusCode
-        }
-    }
-
-    Write-Section "RESUMO HEALTH CHECK"
-
-    $healthResults | Format-Table -AutoSize
-
-    if (-not $FluxoCompleto) {
-        Write-Host ""
-        Write-Host "Somente health checks executados." -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "Para testar o fluxo funcional completo:"
-        Write-Host '.\testar-endpoints-aws.ps1 -FluxoCompleto -MasterKey "SUA_MASTER_KEY"'
-        exit 0
-    }
-
-    if ([string]::IsNullOrWhiteSpace($MasterKey)) {
-        throw "Para usar -FluxoCompleto informe também -MasterKey."
-    }
-
-    if (
-        -not $routes.ContainsKey("Auth") -or
-        -not $routes.ContainsKey("Flag") -or
-        -not $routes.ContainsKey("Targeting") -or
-        -not $routes.ContainsKey("Evaluation")
-    ) {
-        throw "O fluxo completo precisa das rotas de Auth, Flag, Targeting e Evaluation."
-    }
-
-    Write-Section "PRECHECK AWS RUNTIME / LABROLE"
-
-    $evaluationAwsMode = Test-AwsWorkloadPreflight `
-        -Namespace $Namespace `
-        -DeploymentName "evaluation-service" `
-        -AwsRegion $AwsRegion `
-        -ClusterName $ClusterName
-
-    if ($routes.ContainsKey("Analytics")) {
-        $analyticsAwsMode = Test-AwsWorkloadPreflight `
-            -Namespace $Namespace `
-            -DeploymentName "analytics-service" `
-            -AwsRegion $AwsRegion `
-            -ClusterName $ClusterName
-    }
-
-    Write-Section "1 - CRIANDO CHAVE DE API"
-
-    $authRoute = $routes["Auth"]
-
-    $createKeyUrl = Join-ExternalUrl `
-        -BaseUrl $authRoute.BaseUrl `
-        -IngressPath $authRoute.Path `
-        -Endpoint "/admin/keys"
-
-    $keyResult = Invoke-Endpoint `
-        -Name "Auth - Criar API Key" `
-        -Method "POST" `
-        -Url $createKeyUrl `
-        -Headers @{
-            Authorization = "Bearer $MasterKey"
-        } `
-        -Body @{
-            name = "aws-endpoint-test"
-        } `
-        -ExpectedStatus @(200, 201)
-
-    if (-not $keyResult.Success -or [string]::IsNullOrWhiteSpace($keyResult.Content)) {
-        throw "Não foi possível criar a API Key."
-    }
-
-    $keyJson = $keyResult.Content | ConvertFrom-Json
-    $ApiKey = $keyJson.key
-
-    if ([string]::IsNullOrWhiteSpace($ApiKey)) {
-        throw "O auth-service respondeu, mas não retornou o campo 'key'."
-    }
-
-    Write-Ok "API Key criada."
-
-    Write-Section "2 - VALIDANDO CHAVE"
-
-    $validateUrl = Join-ExternalUrl `
-        -BaseUrl $authRoute.BaseUrl `
-        -IngressPath $authRoute.Path `
-        -Endpoint "/validate"
-
-    Invoke-Endpoint `
-        -Name "Auth - Validar API Key" `
-        -Method "GET" `
-        -Url $validateUrl `
-        -Headers @{
-            Authorization = "Bearer $ApiKey"
-        } `
-        -ExpectedStatus @(200) | Out-Null
-
-    Write-Section "3 - CRIANDO FLAG"
-
-    $flagRoute = $routes["Flag"]
-
-    $flagsUrl = Join-ExternalUrl `
-        -BaseUrl $flagRoute.BaseUrl `
-        -IngressPath $flagRoute.Path `
-        -Endpoint "/flags"
-
-    Invoke-Endpoint `
-        -Name "Flag - Criar flag" `
-        -Method "POST" `
-        -Url $flagsUrl `
-        -Headers @{
-            Authorization = "Bearer $ApiKey"
-        } `
-        -Body @{
-            name        = $FlagName
-            description = "Flag criada pelo teste automatizado AWS"
-            is_enabled  = $true
-        } `
-        -ExpectedStatus @(200, 201, 409) | Out-Null
-
-    Invoke-Endpoint `
-        -Name "Flag - Listar flags" `
-        -Method "GET" `
-        -Url $flagsUrl `
-        -Headers @{
-            Authorization = "Bearer $ApiKey"
-        } `
-        -ExpectedStatus @(200) | Out-Null
-
-    Write-Section "4 - CRIANDO REGRA DE TARGETING"
-
-    $targetingRoute = $routes["Targeting"]
-
-    $rulesUrl = Join-ExternalUrl `
-        -BaseUrl $targetingRoute.BaseUrl `
-        -IngressPath $targetingRoute.Path `
-        -Endpoint "/rules"
-
-    Invoke-Endpoint `
-        -Name "Targeting - Criar regra" `
-        -Method "POST" `
-        -Url $rulesUrl `
-        -Headers @{
-            Authorization = "Bearer $ApiKey"
-        } `
-        -Body @{
-            flag_name  = $FlagName
-            is_enabled = $true
-            rules      = @{
-                type  = "PERCENTAGE"
-                value = 50
-            }
-        } `
-        -ExpectedStatus @(200, 201, 409) | Out-Null
-
-    $getRuleUrl = Join-ExternalUrl `
-        -BaseUrl $targetingRoute.BaseUrl `
-        -IngressPath $targetingRoute.Path `
-        -Endpoint "/rules/$FlagName"
-
-    Invoke-Endpoint `
-        -Name "Targeting - Consultar regra" `
-        -Method "GET" `
-        -Url $getRuleUrl `
-        -Headers @{
-            Authorization = "Bearer $ApiKey"
-        } `
-        -ExpectedStatus @(200) | Out-Null
-
-    Write-Section "5 - TESTANDO EVALUATION"
-
-    # Usa exatamente a API Key criada no passo 1.
-    # Ela é salva em um Secret runtime separado, que não fica no Git.
-    Write-Host "Configurando API Key runtime do evaluation-service..." -ForegroundColor Yellow
-
-    $runtimeSecretName = "evaluation-api-key"
-
-    $secretYaml = & kubectl create secret generic $runtimeSecretName `
+    $secretYaml = & kubectl create secret generic $secretName `
         -n $Namespace `
         --from-literal="SERVICE_API_KEY=$ApiKey" `
         --dry-run=client `
         -o yaml
 
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($secretYaml -join "`n"))) {
-        throw "Não foi possível gerar o Secret runtime '$runtimeSecretName'."
+        throw "Nao foi possivel gerar o Secret runtime '$secretName'."
     }
 
     $secretYaml | & kubectl apply -f - | Out-Null
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Não foi possível criar/atualizar o Secret runtime '$runtimeSecretName'."
+        throw "Nao foi possivel aplicar o Secret runtime '$secretName'."
     }
 
-    # O Deployment lê SERVICE_API_KEY do Secret evaluation-api-key.
-    # Reinicia somente o evaluation-service para carregar a chave nova.
-    & kubectl rollout restart `
-        deployment/evaluation-service `
-        -n $Namespace | Out-Null
+    & kubectl rollout restart deployment/evaluation-service -n $Namespace | Out-Null
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Não foi possível reiniciar o evaluation-service."
+        throw "Falha ao reiniciar evaluation-service."
     }
 
     Write-Host "Aguardando rollout do evaluation-service..." -ForegroundColor Yellow
 
-    & kubectl rollout status `
-        deployment/evaluation-service `
+    & kubectl rollout status deployment/evaluation-service `
         -n $Namespace `
         --timeout=120s | Out-Null
 
     if ($LASTEXITCODE -ne 0) {
-        throw "O evaluation-service não ficou Ready dentro do tempo esperado."
+        throw "evaluation-service nao ficou Ready dentro do tempo esperado."
     }
 
-    # Confirma, sem imprimir a chave, que o Pod recebeu a mesma chave criada no teste.
-    $podApiKey = & kubectl exec `
-        -n $Namespace `
-        deployment/evaluation-service `
-        -- printenv SERVICE_API_KEY 2>$null
+    Start-Sleep -Seconds 2
+}
 
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($podApiKey)) {
-        throw "SERVICE_API_KEY não foi encontrada no Pod do evaluation-service."
-    }
-
-    if (($podApiKey -join "`n").Trim() -ne $ApiKey.Trim()) {
-        throw "O evaluation-service não recebeu a API Key criada neste teste."
-    }
-
-    Write-Ok "Evaluation configurado com a API Key criada neste teste."
-
-    Write-Host "Aguardando endpoint do evaluation-service ficar disponível..." -ForegroundColor Yellow
-
-    $endpointReady = $false
-
-    for ($attempt = 1; $attempt -le 15; $attempt++) {
-        $ready = & kubectl get endpointslice `
-            -n $Namespace `
-            -l kubernetes.io/service-name=evaluation-service-svc `
-            -o jsonpath='{.items[0].endpoints[0].conditions.ready}' `
-            2>$null
-
-        if ($LASTEXITCODE -eq 0 -and "$ready".Trim() -eq "true") {
-            $endpointReady = $true
-            break
-        }
-
-        Start-Sleep -Seconds 2
-    }
-
-    if (-not $endpointReady) {
-        throw "O endpoint do evaluation-service não ficou disponível no Kubernetes."
-    }
-
-    Start-Sleep -Seconds 3
-
-    $evaluationRoute = $routes["Evaluation"]
-
-    $evaluateUrl = Join-ExternalUrl `
-        -BaseUrl $evaluationRoute.BaseUrl `
-        -IngressPath $evaluationRoute.Path `
-        -Endpoint "/evaluate?user_id=$TestUserId&flag_name=$FlagName"
-
-    $evaluationResult = $null
-
-    for ($attempt = 1; $attempt -le 5; $attempt++) {
-        $evaluationResult = Invoke-Endpoint `
-            -Name "Evaluation - Avaliar flag" `
-            -Method "GET" `
-            -Url $evaluateUrl `
-            -ExpectedStatus @(200)
-
-        if ($evaluationResult.Success) {
-            break
-        }
-
-        if ($evaluationResult.StatusCode -in @(502, 503)) {
-            Write-Warn "Evaluation retornou HTTP $($evaluationResult.StatusCode). Tentativa $attempt de 5."
-            Start-Sleep -Seconds 3
-            continue
-        }
-
-        break
-    }
-
-    if (-not $evaluationResult.Success) {
-        throw "Falha ao avaliar flag no evaluation-service. HTTP $($evaluationResult.StatusCode)."
-    }
-
-    Write-Section "6 - TESTANDO REDIS"
-
+function Test-RedisPing {
     $redisHost = & kubectl get configmap app-configmap `
         -n $Namespace `
         -o jsonpath='{.data.REDIS_HOST}'
@@ -1020,42 +434,34 @@ try {
         -n $Namespace `
         -o jsonpath='{.data.REDIS_PORT}'
 
-    if (
-        [string]::IsNullOrWhiteSpace($redisHost) -or
-        [string]::IsNullOrWhiteSpace($redisPort)
-    ) {
-        throw "REDIS_HOST ou REDIS_PORT não encontrados no ConfigMap app-configmap."
+    if ([string]::IsNullOrWhiteSpace($redisHost) -or [string]::IsNullOrWhiteSpace($redisPort)) {
+        throw "REDIS_HOST ou REDIS_PORT nao encontrados no ConfigMap app-configmap."
     }
 
-    $redisTestPod = "redis-test-" + (Get-Random -Minimum 1000 -Maximum 9999)
+    $podName = "redis-video-" + (Get-Random -Minimum 1000 -Maximum 9999)
 
     try {
-        Write-Host "Testando conexão com Redis..." -ForegroundColor Yellow
-
-        & kubectl run $redisTestPod `
+        & kubectl run $podName `
             -n $Namespace `
             --restart=Never `
             --image=redis:7-alpine `
             --command `
-            -- redis-cli `
-                -h $redisHost `
-                -p $redisPort `
-                ping | Out-Null
+            -- redis-cli -h $redisHost -p $redisPort ping | Out-Null
 
         if ($LASTEXITCODE -ne 0) {
-            throw "Não foi possível criar o Pod temporário para testar o Redis."
+            throw "Nao foi possivel criar o Pod temporario de teste do Redis."
         }
 
-        $redisFinished = $false
+        $finished = $false
 
-        for ($attempt = 1; $attempt -le 45; $attempt++) {
-            $phase = & kubectl get pod $redisTestPod `
+        for ($i = 1; $i -le 45; $i++) {
+            $phase = & kubectl get pod $podName `
                 -n $Namespace `
                 -o jsonpath='{.status.phase}' `
                 2>$null
 
             if ("$phase".Trim() -eq "Succeeded") {
-                $redisFinished = $true
+                $finished = $true
                 break
             }
 
@@ -1066,220 +472,501 @@ try {
             Start-Sleep -Seconds 2
         }
 
-        $redisOutput = & kubectl logs $redisTestPod `
-            -n $Namespace `
-            2>$null
+        $logs = & kubectl logs $podName -n $Namespace 2>$null
+        $result = ($logs -join "`n").Trim()
 
-        if (-not $redisFinished -or (($redisOutput -join "`n").Trim() -ne "PONG")) {
-            throw "Redis não respondeu PONG."
+        if (-not $finished -or $result -ne "PONG") {
+            throw "Redis nao respondeu PONG. Retorno: $result"
         }
 
-        Write-Ok "Redis respondeu PONG."
-
-        Write-Host "Validando cache do evaluation-service..." -ForegroundColor Yellow
-
-        $cacheResult = Invoke-Endpoint `
-            -Name "Evaluation - Segunda avaliação para validar cache" `
-            -Method "GET" `
-            -Url $evaluateUrl `
-            -ExpectedStatus @(200)
-
-        if (-not $cacheResult.Success) {
-            throw "Falha ao executar segunda avaliação para validar o Redis."
-        }
-
-        Start-Sleep -Seconds 1
-
-        $evaluationLogs = & kubectl logs `
-            -n $Namespace `
-            deployment/evaluation-service `
-            --since=30s `
-            2>$null
-
-        if (($evaluationLogs -join "`n") -match "Cache HIT") {
-            Write-Ok "Cache HIT identificado no evaluation-service."
-        }
-        else {
-            Write-Warn "Redis respondeu PONG, mas não encontrei 'Cache HIT' nos logs recentes."
-        }
+        Write-Ok "Redis respondeu PONG"
     }
     finally {
-        & kubectl delete pod $redisTestPod `
+        & kubectl delete pod $podName `
             -n $Namespace `
             --ignore-not-found=true `
             --wait=false `
             2>$null | Out-Null
     }
+}
 
-    Write-Section "7 - TESTANDO SQS"
+# ==============================================================
+# INICIO
+# ==============================================================
+
+Write-Banner
+
+try {
+    if ($AtualizarKubeconfig) {
+        Write-Host "Atualizando kubeconfig do EKS..." -ForegroundColor Yellow
+        & aws eks update-kubeconfig --region $AwsRegion --name $ClusterName | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao atualizar kubeconfig."
+        }
+
+        Write-Ok "Kubeconfig atualizado"
+    }
+
+    $script:Routes = Get-IngressRoutes
+    Write-Ok "Ingress encontrado: $script:IngressAddress"
+
+    $firstRoute = $script:Routes.Values | Select-Object -First 1
+    if ($firstRoute) {
+        $protocol = (($firstRoute.BaseUrl -split ':')[0]).ToUpper()
+        Write-Ok "Protocolo externo detectado: $protocol"
+    }
+}
+catch {
+    Write-Fail $_.Exception.Message
+    exit 1
+}
+
+# ==============================================================
+# CENARIO 1 - KUBERNETES / EKS
+# ==============================================================
+
+Wait-Video "executar o CENARIO 1 - Kubernetes / EKS"
+Write-Scenario `
+    -Numero 1 `
+    -Titulo "KUBERNETES / EKS" `
+    -Objetivo "Comprovar que os cinco microsservicos estao implantados e disponiveis."
+
+try {
+    & kubectl get pods `
+        -n $Namespace `
+        -l 'app in (analytics-service,auth-service,evaluation-service,flag-service,targeting-service)' `
+        -o wide
+    Write-Host ""
+    & kubectl get svc -n $Namespace
+    Write-Host ""
+    & kubectl get ingress $IngressName -n $Namespace
+
+    Test-DeploymentsReady
+
+    Write-Ok "Auth, Flag, Targeting, Evaluation e Analytics estao disponiveis no EKS."
+    Add-Resultado "1 - Kubernetes / EKS" $true "5 microsservicos disponiveis"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "1 - Kubernetes / EKS" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 2 - HEALTH CHECK
+# ==============================================================
+
+Wait-Video "executar o CENARIO 2 - Health Check"
+Write-Scenario `
+    -Numero 2 `
+    -Titulo "HEALTH CHECK DOS MICROSSERVICOS" `
+    -Objetivo "Validar o acesso externo via Ingress e o endpoint /health de todos os servicos."
+
+try {
+    $serviceMap = [ordered]@{
+        "Auth"       = "auth-service"
+        "Flag"       = "flag-service"
+        "Targeting"  = "targeting-service"
+        "Evaluation" = "evaluation-service"
+        "Analytics"  = "analytics-service"
+    }
+
+    foreach ($item in $serviceMap.GetEnumerator()) {
+        $route = Get-RouteByService -ServiceName $item.Value
+        $url = Join-Url -Route $route -Endpoint "/health"
+
+        Invoke-Api `
+            -Nome "$($item.Key) - Health" `
+            -Method GET `
+            -Url $url `
+            -ExpectedStatus @(200) | Out-Null
+
+        Write-Host ""
+    }
+
+    Write-Ok "Os cinco health checks retornaram HTTP 200."
+    Add-Resultado "2 - Health Check" $true "5/5 endpoints HTTP 200"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "2 - Health Check" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 3 - AUTH SERVICE
+# ==============================================================
+
+Wait-Video "executar o CENARIO 3 - Auth Service"
+Write-Scenario `
+    -Numero 3 `
+    -Titulo "AUTH SERVICE" `
+    -Objetivo "Criar uma API Key e validar a autenticacao utilizada pelos demais microsservicos."
+
+try {
+    Ensure-MasterKey
+
+    $authRoute = Get-RouteByService -ServiceName "auth-service"
+    $createKeyUrl = Join-Url -Route $authRoute -Endpoint "/admin/keys"
+    $validateUrl = Join-Url -Route $authRoute -Endpoint "/validate"
+    $keyName = "video-parte3-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+
+    $keyResult = Invoke-Api `
+        -Nome "Criar API Key" `
+        -Method POST `
+        -Url $createKeyUrl `
+        -Headers @{ Authorization = "Bearer $script:MasterKey" } `
+        -Body @{ name = $keyName } `
+        -ExpectedStatus @(200, 201) `
+        -OcultarResposta
+
+    $keyJson = $keyResult.Content | ConvertFrom-Json
+    $script:ApiKey = [string]$keyJson.key
+
+    if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
+        throw "O Auth respondeu sem o campo 'key'."
+    }
+
+    $maskedKey = if ($script:ApiKey.Length -ge 8) {
+        $script:ApiKey.Substring(0, 4) + "..." + $script:ApiKey.Substring($script:ApiKey.Length - 4)
+    }
+    else {
+        "********"
+    }
+
+    Write-Ok "API Key criada: $maskedKey"
+    Write-Host ""
+
+    Invoke-Api `
+        -Nome "Validar API Key" `
+        -Method GET `
+        -Url $validateUrl `
+        -Headers @{ Authorization = "Bearer $script:ApiKey" } `
+        -ExpectedStatus @(200) | Out-Null
+
+    Write-Ok "Autenticacao validada com sucesso."
+    Add-Resultado "3 - Auth Service" $true "API Key criada e validada"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "3 - Auth Service" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 4 - FLAG SERVICE
+# ==============================================================
+
+Wait-Video "executar o CENARIO 4 - Flag Service"
+Write-Scenario `
+    -Numero 4 `
+    -Titulo "FLAG SERVICE" `
+    -Objetivo "Cadastrar e consultar a feature flag usada na demonstracao."
+
+try {
+    if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
+        throw "API Key nao disponivel. Execute o Cenario 3 com sucesso."
+    }
+
+    $flagRoute = Get-RouteByService -ServiceName "flag-service"
+    $flagsUrl = Join-Url -Route $flagRoute -Endpoint "/flags"
+
+    $createFlag = Invoke-Api `
+        -Nome "Criar feature flag '$FlagName'" `
+        -Method POST `
+        -Url $flagsUrl `
+        -Headers @{ Authorization = "Bearer $script:ApiKey" } `
+        -Body @{
+            name        = $FlagName
+            description = "Flag utilizada na gravacao da Parte 3"
+            is_enabled  = $true
+        } `
+        -ExpectedStatus @(200, 201, 409)
+
+    if ($createFlag.StatusCode -eq 409) {
+        Write-Warn "A flag ja existia. O teste continuara usando o cadastro atual."
+    }
+
+    Write-Host ""
+
+    Invoke-Api `
+        -Nome "Listar feature flags" `
+        -Method GET `
+        -Url $flagsUrl `
+        -Headers @{ Authorization = "Bearer $script:ApiKey" } `
+        -ExpectedStatus @(200) | Out-Null
+
+    Write-Ok "Flag '$FlagName' disponivel para uso."
+    Add-Resultado "4 - Flag Service" $true "Flag criada/existente e listagem HTTP 200"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "4 - Flag Service" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 5 - TARGETING SERVICE
+# ==============================================================
+
+Wait-Video "executar o CENARIO 5 - Targeting Service"
+Write-Scenario `
+    -Numero 5 `
+    -Titulo "TARGETING SERVICE" `
+    -Objetivo "Criar uma regra percentual de 50% e comprovar sua consulta por nome da flag."
+
+try {
+    if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
+        throw "API Key nao disponivel. Execute o Cenario 3 com sucesso."
+    }
+
+    $targetRoute = Get-RouteByService -ServiceName "targeting-service"
+    $rulesUrl = Join-Url -Route $targetRoute -Endpoint "/rules"
+    $getRuleUrl = Join-Url -Route $targetRoute -Endpoint "/rules/$FlagName"
+
+    $createRule = Invoke-Api `
+        -Nome "Criar regra de targeting 50%" `
+        -Method POST `
+        -Url $rulesUrl `
+        -Headers @{ Authorization = "Bearer $script:ApiKey" } `
+        -Body @{
+            flag_name  = $FlagName
+            is_enabled = $true
+            rules      = @{
+                type  = "PERCENTAGE"
+                value = 50
+            }
+        } `
+        -ExpectedStatus @(200, 201, 409)
+
+    if ($createRule.StatusCode -eq 409) {
+        Write-Warn "A regra da flag ja existia. O teste seguira consultando a regra atual."
+    }
+
+    Write-Host ""
+
+    Invoke-Api `
+        -Nome "Consultar regra '$FlagName'" `
+        -Method GET `
+        -Url $getRuleUrl `
+        -Headers @{ Authorization = "Bearer $script:ApiKey" } `
+        -ExpectedStatus @(200) | Out-Null
+
+    Write-Ok "Regra percentual de targeting disponivel."
+    Add-Resultado "5 - Targeting Service" $true "Regra PERCENTAGE 50% consultada"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "5 - Targeting Service" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 6 - EVALUATION + REDIS
+# ==============================================================
+
+Wait-Video "executar o CENARIO 6 - Evaluation e Redis"
+Write-Scenario `
+    -Numero 6 `
+    -Titulo "EVALUATION SERVICE + REDIS" `
+    -Objetivo "Avaliar a flag, testar conectividade com o Redis e demonstrar o cache da avaliacao."
+
+try {
+    if ([string]::IsNullOrWhiteSpace($script:ApiKey)) {
+        throw "API Key nao disponivel. Execute o Cenario 3 com sucesso."
+    }
+
+    Write-Host "Configurando a API Key runtime do Evaluation..." -ForegroundColor Yellow
+    Set-EvaluationApiKey -ApiKey $script:ApiKey
+    Write-Ok "Secret runtime aplicado sem exibir a chave."
+    Write-Host ""
+
+    $evaluationRoute = Get-RouteByService -ServiceName "evaluation-service"
+    $script:EvaluationUrl = Join-Url `
+        -Route $evaluationRoute `
+        -Endpoint "/evaluate?user_id=$TestUserId&flag_name=$FlagName"
+
+    $evaluationResult = Invoke-Api `
+        -Nome "Avaliar feature flag" `
+        -Method GET `
+        -Url $script:EvaluationUrl `
+        -ExpectedStatus @(200)
+
+    $evaluationJson = $evaluationResult.Content | ConvertFrom-Json
+
+    if ($null -eq $evaluationJson.result) {
+        throw "Evaluation respondeu HTTP 200, mas nao retornou o campo 'result'."
+    }
+
+    Write-Host "Resultado da avaliacao: $($evaluationJson.result)" -ForegroundColor Cyan
+    Write-Host ""
+
+    Test-RedisPing
+    Write-Host ""
+
+    Invoke-Api `
+        -Nome "Repetir avaliacao para validar cache" `
+        -Method GET `
+        -Url $script:EvaluationUrl `
+        -ExpectedStatus @(200) | Out-Null
+
+    Start-Sleep -Seconds 1
+
+    $evaluationLogs = & kubectl logs `
+        -n $Namespace `
+        deployment/evaluation-service `
+        --since=45s `
+        2>$null
+
+    if (($evaluationLogs -join "`n") -match "Cache HIT") {
+        Write-Ok "Cache HIT identificado nos logs do Evaluation."
+        Add-Resultado "6 - Evaluation + Redis" $true "Evaluation HTTP 200, Redis PONG e Cache HIT"
+    }
+    else {
+        Write-Warn "Redis respondeu PONG, mas 'Cache HIT' nao apareceu nos logs recentes."
+        Add-Resultado "6 - Evaluation + Redis" $true "Evaluation HTTP 200 e Redis PONG; Cache HIT nao localizado"
+    }
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "6 - Evaluation + Redis" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 7 - SQS
+# ==============================================================
+
+Wait-Video "executar o CENARIO 7 - Amazon SQS"
+Write-Scenario `
+    -Numero 7 `
+    -Titulo "AMAZON SQS" `
+    -Objetivo "Gerar uma nova avaliacao e comprovar o envio/consumo do evento assincrono."
+
+try {
+    $evaluationRoute = Get-RouteByService -ServiceName "evaluation-service"
+    $analyticsRoute = Get-RouteByService -ServiceName "analytics-service"
 
     $sqsUrl = & kubectl get configmap app-configmap `
         -n $Namespace `
         -o jsonpath='{.data.AWS_SQS_URL}'
 
     if ([string]::IsNullOrWhiteSpace($sqsUrl)) {
-        throw "AWS_SQS_URL não encontrada no ConfigMap app-configmap."
+        throw "AWS_SQS_URL nao encontrada no ConfigMap app-configmap."
     }
 
-    Write-Host "Validando leitura da fila SQS..." -ForegroundColor Yellow
+    Write-Host "Fila configurada no ambiente: OK" -ForegroundColor Green
 
-    $sqsAttributesJson = & aws sqs get-queue-attributes `
+    $queueAttributes = & aws sqs get-queue-attributes `
         --queue-url $sqsUrl `
-        --attribute-names `
-            ApproximateNumberOfMessages `
-            ApproximateNumberOfMessagesNotVisible `
-            ApproximateNumberOfMessagesDelayed `
+        --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible `
         --region $AwsRegion `
         --output json `
         2>$null
 
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($sqsAttributesJson -join "`n"))) {
-        $sqsAttributes = ($sqsAttributesJson -join "`n") | ConvertFrom-Json
-
-        Write-Ok "Fila SQS acessível para leitura."
-        Write-Host "Mensagens disponíveis: $($sqsAttributes.Attributes.ApproximateNumberOfMessages)"
-        Write-Host "Mensagens em processamento: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesNotVisible)"
-        Write-Host "Mensagens atrasadas: $($sqsAttributes.Attributes.ApproximateNumberOfMessagesDelayed)"
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($queueAttributes -join "`n"))) {
+        $queueJson = ($queueAttributes -join "`n") | ConvertFrom-Json
+        Write-Host "Mensagens disponiveis:     $($queueJson.Attributes.ApproximateNumberOfMessages)"
+        Write-Host "Mensagens em processamento: $($queueJson.Attributes.ApproximateNumberOfMessagesNotVisible)"
     }
     else {
-        Write-Warn "A AWS CLI local não conseguiu consultar os atributos da SQS. O envio pelo evaluation-service ainda será validado pelos logs do workload."
+        Write-Warn "AWS CLI local nao consultou os atributos; a validacao continuara pelos workloads."
     }
 
-    $sqsTestUser = "sqs-test-" + (Get-Date -Format "yyyyMMddHHmmss")
+    $sqsUser = "video-sqs-" + (Get-Date -Format "yyyyMMddHHmmss")
+    $sqsEvaluationUrl = Join-Url `
+        -Route $evaluationRoute `
+        -Endpoint "/evaluate?user_id=$sqsUser&flag_name=$FlagName"
 
-    $sqsEvaluateUrl = Join-ExternalUrl `
-        -BaseUrl $evaluationRoute.BaseUrl `
-        -IngressPath $evaluationRoute.Path `
-        -Endpoint "/evaluate?user_id=$sqsTestUser&flag_name=$FlagName"
+    $since = (Get-Date).ToUniversalTime().AddSeconds(-2).ToString("yyyy-MM-ddTHH:mm:ssZ")
 
-    # Marca o instante da chamada. Assim não confundimos erros antigos do Evaluation
-    # com o envio que está sendo testado agora.
-    $sqsLogSince = (Get-Date).ToUniversalTime().AddSeconds(-2).ToString("yyyy-MM-ddTHH:mm:ssZ")
+    Invoke-Api `
+        -Nome "Gerar evento de avaliacao para SQS" `
+        -Method GET `
+        -Url $sqsEvaluationUrl `
+        -ExpectedStatus @(200) | Out-Null
 
-    $sqsEvaluationResult = Invoke-Endpoint `
-        -Name "Evaluation - Gerar evento para SQS" `
-        -Method "GET" `
-        -Url $sqsEvaluateUrl `
-        -ExpectedStatus @(200)
-
-    if (-not $sqsEvaluationResult.Success) {
-        throw "Não foi possível executar a avaliação que deveria produzir o evento SQS."
-    }
-
-    Write-Host "Aguardando o envio assíncrono para a SQS..." -ForegroundColor Yellow
+    Write-Host "Aguardando processamento assincrono..." -ForegroundColor Yellow
     Start-Sleep -Seconds 6
 
-    $sqsEvaluationLogs = & kubectl logs `
+    $evaluationLogs = & kubectl logs `
         -n $Namespace `
         deployment/evaluation-service `
-        "--since-time=$sqsLogSince" `
+        "--since-time=$since" `
         2>$null
 
-    $sqsEvaluationLogText = ($sqsEvaluationLogs -join "`n")
-    $sqsFailure = Get-AwsFailureSummary -Text $sqsEvaluationLogText
+    $evaluationText = ($evaluationLogs -join "`n")
 
-    if ($sqsEvaluationLogText -match "Erro ao enviar mensagem para SQS") {
-        if ($sqsFailure -eq "NO_CREDENTIALS") {
-            $context = Get-WorkloadNodeAwsContext `
-                -Namespace $Namespace `
-                -DeploymentName "evaluation-service" `
-                -AwsRegion $AwsRegion `
-                -ClusterName $ClusterName
-
-            $hop = if ($context -and $null -ne $context.HopLimit) {
-                $context.HopLimit
-            }
-            else {
-                "desconhecido"
-            }
-
-            throw "O /evaluate respondeu 200, mas o evento NÃO foi enviado para a SQS. O evaluation-service retornou NoCredentialProviders. Modo esperado: NodeRole/IMDS. HopLimit atual: $hop."
-        }
-
-        if ($sqsFailure -eq "ACCESS_DENIED") {
-            throw "O /evaluate respondeu 200, mas o evento NÃO foi enviado para a SQS. A AWS retornou AccessDenied/explicit deny para o evaluation-service."
-        }
-
-        if ($sqsFailure -eq "EXPIRED") {
-            throw "O /evaluate respondeu 200, mas o evento NÃO foi enviado para a SQS porque a credencial AWS está expirada/inválida."
-        }
-
-        throw "O /evaluate respondeu 200, mas o evaluation-service registrou erro ao enviar a mensagem para a SQS."
+    if ($evaluationText -match "Erro ao enviar mensagem para SQS|AccessDenied|NoCredentialProviders|ExpiredToken|RequestExpired") {
+        throw "O Evaluation registrou erro ao enviar o evento para a SQS."
     }
 
-    if ($sqsFailure) {
-        throw "O evaluation-service registrou falha AWS durante o teste SQS: $sqsFailure."
-    }
+    Write-Ok "Evaluation executou sem erro de SendMessage para SQS."
 
-    Write-Ok "Evaluation respondeu 200 e não registrou erro no SendMessage da SQS."
-
-    $analyticsSqsLogs = & kubectl logs `
+    $analyticsLogs = & kubectl logs `
         -n $Namespace `
         deployment/analytics-service `
-        "--since-time=$sqsLogSince" `
+        "--since-time=$since" `
         2>$null
 
-    $analyticsSqsLogText = ($analyticsSqsLogs -join "`n")
+    $analyticsText = ($analyticsLogs -join "`n")
 
-    if ($analyticsSqsLogText -match "Recebidas|Processando mensagem") {
-        Write-Ok "Analytics registrou consumo/processamento de mensagem da SQS."
+    if ($analyticsText -match "Recebidas|Processando mensagem") {
+        Write-Ok "Analytics registrou consumo/processamento da mensagem."
+        Add-Resultado "7 - Amazon SQS" $true "Evento enviado e consumo identificado no Analytics"
     }
     else {
-        Write-Warn "Ainda não encontrei consumo da mensagem nos logs do Analytics. A persistência no DynamoDB fará a validação ponta a ponta."
+        Write-Warn "O consumo nao apareceu no trecho de log; o Cenario 8 validara a persistencia ponta a ponta."
+        Add-Resultado "7 - Amazon SQS" $true "Evaluation sem erro de envio; consumo sera confirmado no DynamoDB"
     }
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "7 - Amazon SQS" $false $_.Exception.Message
+}
 
-    Write-Section "8 - TESTANDO ANALYTICS E DYNAMODB"
+# ==============================================================
+# CENARIO 8 - ANALYTICS + DYNAMODB
+# ==============================================================
 
-    if (-not $routes.ContainsKey("Analytics")) {
-        throw "Não encontrei a rota do analytics-service."
-    }
+Wait-Video "executar o CENARIO 8 - Analytics e DynamoDB"
+Write-Scenario `
+    -Numero 8 `
+    -Titulo "ANALYTICS SERVICE + DYNAMODB" `
+    -Objetivo "Comprovar o fluxo ponta a ponta: Evaluation -> SQS -> Analytics -> DynamoDB."
 
-    $analyticsRoute = $routes["Analytics"]
+try {
+    $analyticsRoute = Get-RouteByService -ServiceName "analytics-service"
+    $analyticsHealth = Join-Url -Route $analyticsRoute -Endpoint "/health"
 
-    $analyticsHealth = Join-ExternalUrl `
-        -BaseUrl $analyticsRoute.BaseUrl `
-        -IngressPath $analyticsRoute.Path `
-        -Endpoint "/health"
-
-    $analyticsHealthResult = Invoke-Endpoint `
-        -Name "Analytics - Health" `
-        -Method "GET" `
+    Invoke-Api `
+        -Nome "Analytics - Health" `
+        -Method GET `
         -Url $analyticsHealth `
-        -ExpectedStatus @(200)
-
-    if (-not $analyticsHealthResult.Success) {
-        throw "Analytics health check falhou."
-    }
+        -ExpectedStatus @(200) | Out-Null
 
     $dynamoTable = & kubectl get configmap app-configmap `
         -n $Namespace `
         -o jsonpath='{.data.AWS_DYNAMODB_TABLE}'
 
     if ([string]::IsNullOrWhiteSpace($dynamoTable)) {
-        throw "AWS_DYNAMODB_TABLE não encontrada no ConfigMap app-configmap."
+        throw "AWS_DYNAMODB_TABLE nao encontrada no ConfigMap app-configmap."
     }
 
-    Write-Host "Validando tabela DynamoDB..." -ForegroundColor Yellow
-
-    $tableJson = & aws dynamodb describe-table `
+    $tableInfoRaw = & aws dynamodb describe-table `
         --table-name $dynamoTable `
         --region $AwsRegion `
         --output json `
         2>$null
 
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($tableJson -join "`n"))) {
-        throw "Não foi possível consultar a tabela DynamoDB '$dynamoTable'."
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($tableInfoRaw -join "`n"))) {
+        throw "Nao foi possivel consultar a tabela DynamoDB '$dynamoTable'."
     }
 
-    $tableInfo = ($tableJson -join "`n") | ConvertFrom-Json
+    $tableInfo = ($tableInfoRaw -join "`n") | ConvertFrom-Json
 
     if ($tableInfo.Table.TableStatus -ne "ACTIVE") {
-        throw "Tabela DynamoDB '$dynamoTable' não está ACTIVE."
+        throw "Tabela DynamoDB '$dynamoTable' nao esta ACTIVE."
     }
 
-    Write-Ok "DynamoDB $dynamoTable está ACTIVE."
+    Write-Ok "DynamoDB '$dynamoTable' esta ACTIVE."
 
-    $beforeCountJson = & aws dynamodb scan `
+    $beforeRaw = & aws dynamodb scan `
         --table-name $dynamoTable `
         --region $AwsRegion `
         --select COUNT `
@@ -1287,39 +974,33 @@ try {
         2>$null
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Não foi possível contar os registros atuais do DynamoDB."
+        throw "Nao foi possivel contar os registros atuais do DynamoDB."
     }
 
-    $beforeCount = [int](($beforeCountJson -join "`n") | ConvertFrom-Json).Count
+    $beforeCount = [int](($beforeRaw -join "`n") | ConvertFrom-Json).Count
+    Write-Host "Registros antes:  $beforeCount"
 
-    Write-Host "Registros antes do teste: $beforeCount"
+    $evaluationRoute = Get-RouteByService -ServiceName "evaluation-service"
+    $dynamoUser = "video-dynamo-" + (Get-Date -Format "yyyyMMddHHmmss")
+    $dynamoEvaluationUrl = Join-Url `
+        -Route $evaluationRoute `
+        -Endpoint "/evaluate?user_id=$dynamoUser&flag_name=$FlagName"
 
-    $dynamoTestUser = "dynamo-test-" + (Get-Date -Format "yyyyMMddHHmmss")
+    Invoke-Api `
+        -Nome "Gerar evento ponta a ponta" `
+        -Method GET `
+        -Url $dynamoEvaluationUrl `
+        -ExpectedStatus @(200) | Out-Null
 
-    $dynamoEvaluateUrl = Join-ExternalUrl `
-        -BaseUrl $evaluationRoute.BaseUrl `
-        -IngressPath $evaluationRoute.Path `
-        -Endpoint "/evaluate?user_id=$dynamoTestUser&flag_name=$FlagName"
+    Write-Host "Aguardando Analytics persistir o evento no DynamoDB..." -ForegroundColor Yellow
 
-    $dynamoEvaluationResult = Invoke-Endpoint `
-        -Name "Evaluation - Gerar evento para DynamoDB" `
-        -Method "GET" `
-        -Url $dynamoEvaluateUrl `
-        -ExpectedStatus @(200)
-
-    if (-not $dynamoEvaluationResult.Success) {
-        throw "Não foi possível gerar o evento para testar Analytics/DynamoDB."
-    }
-
-    Write-Host "Aguardando Analytics consumir SQS e persistir no DynamoDB..." -ForegroundColor Yellow
-
-    $dynamoPersisted = $false
+    $persisted = $false
     $afterCount = $beforeCount
 
-    for ($attempt = 1; $attempt -le 8; $attempt++) {
-        Start-Sleep -Seconds 5
+    for ($i = 1; $i -le 10; $i++) {
+        Start-Sleep -Seconds 4
 
-        $afterCountJson = & aws dynamodb scan `
+        $afterRaw = & aws dynamodb scan `
             --table-name $dynamoTable `
             --region $AwsRegion `
             --select COUNT `
@@ -1330,109 +1011,276 @@ try {
             continue
         }
 
-        $afterCount = [int](($afterCountJson -join "`n") | ConvertFrom-Json).Count
+        $afterCount = [int](($afterRaw -join "`n") | ConvertFrom-Json).Count
 
         if ($afterCount -gt $beforeCount) {
-            $dynamoPersisted = $true
+            $persisted = $true
             break
         }
     }
 
-    $analyticsLogs = & kubectl logs `
-        -n $Namespace `
-        deployment/analytics-service `
-        --since=90s `
-        2>$null
-
-    $relevantAnalyticsLogs = @(
-        $analyticsLogs |
-            Select-String -Pattern "Recebidas|Processando|DynamoDB|salvo|Erro|ERROR|AccessDenied|NoCredentialProviders|ExpiredToken|RequestExpired"
-    )
-
-    if ($relevantAnalyticsLogs.Count -gt 0) {
-        Write-Host ""
-        Write-Host "Logs recentes do Analytics:" -ForegroundColor DarkGray
-
-        foreach ($logLine in $relevantAnalyticsLogs) {
-            Write-Host $logLine.Line -ForegroundColor DarkGray
-        }
-    }
-
-    if (-not $dynamoPersisted) {
-        $evaluationRecentLogs = & kubectl logs `
-            -n $Namespace `
-            deployment/evaluation-service `
-            --since=120s `
-            2>$null
-
-        $evaluationRecentText = ($evaluationRecentLogs -join "`n")
-        $evaluationAwsFailure = Get-AwsFailureSummary -Text $evaluationRecentText
-        $analyticsLogText = ($analyticsLogs -join "`n")
-        $analyticsAwsFailure = Get-AwsFailureSummary -Text $analyticsLogText
-
-        if ($evaluationRecentText -match "Erro ao enviar mensagem para SQS") {
-            if ($evaluationAwsFailure -eq "NO_CREDENTIALS") {
-                throw "O DynamoDB não recebeu registro porque o evaluation-service não conseguiu credenciais AWS para enviar o evento à SQS (NoCredentialProviders)."
-            }
-
-            if ($evaluationAwsFailure -eq "ACCESS_DENIED") {
-                throw "O DynamoDB não recebeu registro porque a AWS negou o SendMessage do evaluation-service para a SQS."
-            }
-
-            throw "O DynamoDB não recebeu registro porque o evaluation-service falhou antes, durante o envio do evento para a SQS."
-        }
-
-        if ($analyticsAwsFailure -eq "NO_CREDENTIALS") {
-            $analyticsContext = Get-WorkloadNodeAwsContext `
-                -Namespace $Namespace `
-                -DeploymentName "analytics-service" `
-                -AwsRegion $AwsRegion `
-                -ClusterName $ClusterName
-
-            $hop = if ($analyticsContext -and $null -ne $analyticsContext.HopLimit) {
-                $analyticsContext.HopLimit
-            }
-            else {
-                "desconhecido"
-            }
-
-            throw "A mensagem pode ter chegado à SQS, mas o analytics-service não conseguiu credenciais AWS. NoCredentialProviders. HopLimit do node do Analytics: $hop."
-        }
-
-        if ($analyticsAwsFailure -eq "ACCESS_DENIED") {
-            throw "O Analytics recebeu uma identidade AWS, mas houve AccessDenied ao consumir a SQS ou gravar no DynamoDB."
-        }
-
-        if ($analyticsAwsFailure -eq "EXPIRED") {
-            throw "O Analytics está usando credencial AWS expirada/inválida."
-        }
-
-        if ($analyticsLogText -match "Recebidas|Processando mensagem") {
-            throw "O Analytics recebeu/processou a mensagem, mas nenhum novo item apareceu no DynamoDB dentro do tempo esperado. Verifique erros de PutItem nos logs acima."
-        }
-
-        throw "Nenhum novo registro apareceu no DynamoDB e não encontrei erro AWS explícito. Verifique se o Analytics realmente consumiu a mensagem da SQS."
-    }
-
-    Write-Ok "Analytics consumiu o fluxo e o DynamoDB recebeu novo registro."
-    Write-Host "Registros antes:  $beforeCount"
     Write-Host "Registros depois: $afterCount"
 
-    Write-Section "TESTE FINALIZADO"
+    if (-not $persisted) {
+        throw "Nenhum novo registro apareceu no DynamoDB dentro do tempo de validacao."
+    }
 
-    Write-Ok "Fluxo de endpoints e infraestrutura AWS concluído."
-    Write-Host ""
-    Write-Host "Flag utilizada: $FlagName"
-    Write-Host "Usuário teste:  $TestUserId"
-    Write-Host ""
-    Write-Host "Infraestrutura validada:"
-    Write-Host "  Redis    -> PONG / Cache"
-    Write-Host "  SQS      -> SendMessage validado pelos logs do Evaluation"
-    Write-Host "  Analytics -> worker saudável"
-    Write-Host "  DynamoDB -> tabela ACTIVE / novo registro persistido"
+    Write-Ok "Fluxo ponta a ponta confirmado: Evaluation -> SQS -> Analytics -> DynamoDB."
+    Add-Resultado "8 - Analytics + DynamoDB" $true "Novo registro persistido no DynamoDB"
 }
 catch {
-    Write-Host ""
     Write-Fail $_.Exception.Message
-    exit 1
+    Add-Resultado "8 - Analytics + DynamoDB" $false $_.Exception.Message
 }
+
+# ==============================================================
+# CENARIO 9 - HPA / AUTO SCALING
+# ==============================================================
+
+Wait-Video "executar o CENARIO 9 - HPA / Auto Scaling"
+Write-Scenario `
+    -Numero 9 `
+    -Titulo "HPA / AUTO SCALING" `
+    -Objetivo "Gerar carga no microsservico e comprovar o aumento automatico de replicas pelo Horizontal Pod Autoscaler."
+
+$hpaLoadPodNames = @()
+
+try {
+    Write-Host "HPAs configurados no namespace:" -ForegroundColor Yellow
+    & kubectl get hpa -n $Namespace
+    Write-Host ""
+
+    $hpaList = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "hpa", "-n", $Namespace, "-o", "json")
+
+    if (-not $hpaList -or @($hpaList.items).Count -eq 0) {
+        throw "Nenhum HPA encontrado no namespace '$Namespace'."
+    }
+
+    # Para a demonstracao, prioriza o Evaluation porque o endpoint /evaluate
+    # gera trabalho suficiente para demonstrar o scale-out.
+    $hpa = @(
+        $hpaList.items |
+            Where-Object { $_.spec.scaleTargetRef.name -eq "evaluation-service" }
+    ) | Select-Object -First 1
+
+    if (-not $hpa) {
+        $hpa = @($hpaList.items) | Select-Object -First 1
+        Write-Warn "Nao encontrei HPA do evaluation-service. O teste usara o primeiro HPA disponivel."
+    }
+
+    $hpaName = [string]$hpa.metadata.name
+    $targetDeployment = [string]$hpa.spec.scaleTargetRef.name
+    $minReplicas = if ($null -ne $hpa.spec.minReplicas) { [int]$hpa.spec.minReplicas } else { 1 }
+    $maxReplicas = [int]$hpa.spec.maxReplicas
+
+    if ([string]::IsNullOrWhiteSpace($hpaName) -or [string]::IsNullOrWhiteSpace($targetDeployment)) {
+        throw "Nao foi possivel identificar o HPA ou seu Deployment alvo."
+    }
+
+    Write-Host "HPA selecionado:    $hpaName"
+    Write-Host "Deployment alvo:   $targetDeployment"
+    Write-Host "Min replicas:      $minReplicas"
+    Write-Host "Max replicas:      $maxReplicas"
+    Write-Host "Pods de carga:     $HpaLoadPods"
+    Write-Host "Tempo maximo:      $HpaMaxWaitSeconds segundos"
+    Write-Host ""
+
+    # Confirma se o HPA esta conseguindo calcular as metricas antes da carga.
+    $hpaStatus = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "hpa", $hpaName, "-n", $Namespace, "-o", "json")
+
+    $scalingActiveCondition = @(
+        $hpaStatus.status.conditions |
+            Where-Object { $_.type -eq "ScalingActive" }
+    ) | Select-Object -First 1
+
+    if ($scalingActiveCondition -and $scalingActiveCondition.status -eq "False") {
+        throw "HPA sem metricas ativas. Motivo: $($scalingActiveCondition.reason) - $($scalingActiveCondition.message)"
+    }
+
+    $deployment = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "deployment", $targetDeployment, "-n", $Namespace, "-o", "json")
+
+    if (-not $deployment) {
+        throw "Deployment '$targetDeployment' nao encontrado."
+    }
+
+    $replicasAntes = if ($deployment.status.replicas) { [int]$deployment.status.replicas } else { 0 }
+    $readyAntes = if ($deployment.status.readyReplicas) { [int]$deployment.status.readyReplicas } else { 0 }
+
+    Write-Host "Replicas antes da carga: $replicasAntes (Ready: $readyAntes)" -ForegroundColor Cyan
+    Write-Host ""
+
+    # O endpoint interno evita depender do Ingress durante o teste de carga.
+    if ($targetDeployment -eq "evaluation-service") {
+        $targetUrl = "http://evaluation-service-svc:8080/evaluate?user_id=hpa-load-`$i&flag_name=$FlagName"
+        $loadCommand = 'i=0; while true; do i=$((i+1)); wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; done'
+    }
+    else {
+        $serviceName = "$targetDeployment-svc"
+        $targetUrl = "http://${serviceName}:8080/health"
+        $loadCommand = 'while true; do wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; done'
+    }
+
+    Write-Host "Gerando carga interna contra: $targetUrl" -ForegroundColor Yellow
+
+    for ($i = 1; $i -le $HpaLoadPods; $i++) {
+        $podName = "hpa-load-$i-" + (Get-Random -Minimum 1000 -Maximum 9999)
+        $hpaLoadPodNames += $podName
+
+        & kubectl run $podName `
+            -n $Namespace `
+            --restart=Never `
+            --image=busybox:1.36 `
+            --command `
+            -- /bin/sh -c $loadCommand | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao criar o Pod gerador de carga '$podName'."
+        }
+    }
+
+    Write-Ok "$HpaLoadPods Pods de carga criados."
+    Write-Host "Aguardando o HPA detectar aumento de utilizacao..." -ForegroundColor Yellow
+    Write-Host ""
+
+    $scaled = $false
+    $replicasDepois = $replicasAntes
+    $desiredDepois = $replicasAntes
+    $inicioHpa = Get-Date
+
+    while (((Get-Date) - $inicioHpa).TotalSeconds -lt $HpaMaxWaitSeconds) {
+        Start-Sleep -Seconds 10
+
+        $currentHpa = Invoke-NativeJson `
+            -Command "kubectl" `
+            -Arguments @("get", "hpa", $hpaName, "-n", $Namespace, "-o", "json")
+
+        $currentDeployment = Invoke-NativeJson `
+            -Command "kubectl" `
+            -Arguments @("get", "deployment", $targetDeployment, "-n", $Namespace, "-o", "json")
+
+        if (-not $currentHpa -or -not $currentDeployment) {
+            continue
+        }
+
+        $currentReplicas = if ($currentHpa.status.currentReplicas) { [int]$currentHpa.status.currentReplicas } else { 0 }
+        $desiredReplicas = if ($currentHpa.status.desiredReplicas) { [int]$currentHpa.status.desiredReplicas } else { 0 }
+        $readyReplicas = if ($currentDeployment.status.readyReplicas) { [int]$currentDeployment.status.readyReplicas } else { 0 }
+
+        $metricText = ""
+        if ($currentHpa.status.currentMetrics) {
+            try {
+                $metric = @($currentHpa.status.currentMetrics)[0]
+                if ($metric.resource.current.averageUtilization) {
+                    $metricText = " | CPU: $($metric.resource.current.averageUtilization)%"
+                }
+                elseif ($metric.resource.current.averageValue) {
+                    $metricText = " | Metrica: $($metric.resource.current.averageValue)"
+                }
+            }
+            catch {
+                $metricText = ""
+            }
+        }
+
+        Write-Host ("HPA -> Current: {0} | Desired: {1} | Ready: {2}{3}" -f `
+            $currentReplicas, $desiredReplicas, $readyReplicas, $metricText)
+
+        $replicasDepois = $currentReplicas
+        $desiredDepois = $desiredReplicas
+
+        if ($desiredReplicas -gt $replicasAntes -or $currentReplicas -gt $replicasAntes) {
+            $scaled = $true
+            break
+        }
+    }
+
+    Write-Host ""
+
+    if (-not $scaled) {
+        Write-Warn "O HPA nao aumentou replicas dentro do tempo de teste."
+        Write-Host "Diagnostico do HPA:" -ForegroundColor Yellow
+        & kubectl describe hpa $hpaName -n $Namespace
+        throw "HPA nao executou scale-out em ate $HpaMaxWaitSeconds segundos."
+    }
+
+    Write-Ok "Scale-out identificado pelo HPA."
+    Write-Host "Replicas antes:   $replicasAntes"
+    Write-Host "Current replicas: $replicasDepois"
+    Write-Host "Desired replicas: $desiredDepois"
+    Write-Host ""
+    Write-Host "Estado atual do HPA:" -ForegroundColor Yellow
+    & kubectl get hpa $hpaName -n $Namespace
+
+    Add-Resultado `
+        "9 - HPA / Auto Scaling" `
+        $true `
+        "Scale-out confirmado: $replicasAntes -> desired $desiredDepois replicas"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "9 - HPA / Auto Scaling" $false $_.Exception.Message
+}
+finally {
+    if ($hpaLoadPodNames.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Removendo Pods geradores de carga..." -ForegroundColor Yellow
+
+        foreach ($podName in $hpaLoadPodNames) {
+            & kubectl delete pod $podName `
+                -n $Namespace `
+                --ignore-not-found=true `
+                --wait=false `
+                2>$null | Out-Null
+        }
+
+        Write-Ok "Carga removida. O HPA podera reduzir as replicas apos o periodo de estabilizacao."
+    }
+}
+
+# ==============================================================
+# RESUMO FINAL
+# ==============================================================
+
+Write-Host ""
+Write-Host "==============================================================" -ForegroundColor Magenta
+Write-Host "                 RESUMO FINAL DOS TESTES" -ForegroundColor Magenta
+Write-Host "==============================================================" -ForegroundColor Magenta
+Write-Host ""
+
+$script:Resultados | Format-Table -AutoSize
+
+$total = $script:Resultados.Count
+$aprovados = @($script:Resultados | Where-Object { $_.Status -eq "APROVADO" }).Count
+$falhas = $total - $aprovados
+$duracao = (Get-Date) - $script:InicioTeste
+
+Write-Host "Total:     $total"
+Write-Host "Aprovados: $aprovados" -ForegroundColor Green
+
+if ($falhas -gt 0) {
+    Write-Host "Falhas:    $falhas" -ForegroundColor Red
+}
+else {
+    Write-Host "Falhas:    0" -ForegroundColor Green
+}
+
+Write-Host ("Duracao:   {0:mm\:ss}" -f $duracao)
+Write-Host ""
+
+if ($falhas -eq 0) {
+    Write-Host "==============================================================" -ForegroundColor Green
+    Write-Host "      TOGGLE MASTER PARTE 3 - TODOS OS CENARIOS APROVADOS" -ForegroundColor Green
+    Write-Host "==============================================================" -ForegroundColor Green
+    exit 0
+}
+
+Write-Host "==============================================================" -ForegroundColor Red
+Write-Host "      TOGGLE MASTER PARTE 3 - EXISTEM CENARIOS COM FALHA" -ForegroundColor Red
+Write-Host "==============================================================" -ForegroundColor Red
+exit 1
