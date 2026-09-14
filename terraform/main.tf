@@ -282,6 +282,42 @@ resource "aws_eks_node_group" "main" {
 }
 
 # ------------------------------------------------------------------------------
+# EKS LAUNCH TEMPLATE
+# ------------------------------------------------------------------------------
+
+resource "aws_launch_template" "eks_nodes" {
+  name_prefix = "${var.project_name}-${var.environment}-eks-nodes-"
+
+  # Necessário para os Pods acessarem a IAM Role do Node via IMDSv2.
+  # HopLimit = 1 permite acesso apenas a partir da própria EC2.
+  # HopLimit = 2 permite que os containers/pods alcancem o IMDSv2.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+    instance_metadata_tags      = "disabled"
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name        = "${var.project_name}-${var.environment}-eks-node"
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "Terraform"
+    }
+  }
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-eks-launch-template"
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
+}
+
+# ------------------------------------------------------------------------------
 # KUBECONFIG
 # ------------------------------------------------------------------------------
 
