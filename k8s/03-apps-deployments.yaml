@@ -58,7 +58,7 @@ spec:
               '
       containers:
         - name: auth-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-auth-service:b4f7bad784eb919647df901bbb2acae1ee0efec0
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-auth-service:cabf8d8e135e78608e6bce81baaaa48c498530da
           ports:
             - containerPort: 8001
           env:
@@ -189,7 +189,7 @@ spec:
               \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
       containers:
         - name: flag-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:b4f7bad784eb919647df901bbb2acae1ee0efec0
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:cabf8d8e135e78608e6bce81baaaa48c498530da
           ports:
             - containerPort: 8002
           env:
@@ -320,7 +320,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:b4f7bad784eb919647df901bbb2acae1ee0efec0
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:cabf8d8e135e78608e6bce81baaaa48c498530da
           ports:
             - containerPort: 8003
           env:
@@ -412,7 +412,7 @@ spec:
 
       containers:
         - name: evaluation-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:b4f7bad784eb919647df901bbb2acae1ee0efec0
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-evaluation-service:cabf8d8e135e78608e6bce81baaaa48c498530da
           ports:
             - containerPort: 8004
 
@@ -522,7 +522,7 @@ spec:
 
       containers:
         - name: analytics-service
-          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:b4f7bad784eb919647df901bbb2acae1ee0efec0
+          image: 596081564794.dkr.ecr.us-east-1.amazonaws.com/togglemaster-analytics-service:cabf8d8e135e78608e6bce81baaaa48c498530da
           ports:
             - containerPort: 8005
 
