@@ -3,11 +3,13 @@ param(
     [string]$IngressName = "toggle-master-ingress",
     [string]$AwsRegion = "us-east-1",
     [string]$ClusterName = "togglemaster-dev",
-    [string]$MasterKey = $env:TOGGLE_MASTER_KEY,
+    [string]$MasterKey = "admin-secreto-123",
     [string]$FlagName = "enable-new-dashboard",
     [string]$TestUserId = "user-123",
     [switch]$AtualizarKubeconfig,
-    [switch]$SemPausa
+    [switch]$SemPausa,
+    [int]$HpaLoadPods = 5,
+    [int]$HpaMaxWaitSeconds = 180
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +26,7 @@ $script:Routes = @{}
 $script:IngressAddress = $null
 $script:EvaluationUrl = $null
 $script:InicioTeste = Get-Date
+$script:MasterKey = $MasterKey
 
 function Write-Banner {
     Clear-Host
@@ -339,15 +342,8 @@ function Get-PlainTextFromSecureString {
 }
 
 function Ensure-MasterKey {
-    if (-not [string]::IsNullOrWhiteSpace($script:MasterKey)) {
-        return
-    }
-
-    $secure = Read-Host "Informe a Master Key do auth-service" -AsSecureString
-    $script:MasterKey = Get-PlainTextFromSecureString -SecureString $secure
-
     if ([string]::IsNullOrWhiteSpace($script:MasterKey)) {
-        throw "Master Key nao informada."
+        throw "Master Key nao configurada no script."
     }
 }
 
@@ -1029,6 +1025,216 @@ try {
 catch {
     Write-Fail $_.Exception.Message
     Add-Resultado "8 - Analytics + DynamoDB" $false $_.Exception.Message
+}
+
+# ==============================================================
+# CENARIO 9 - HPA / AUTO SCALING
+# ==============================================================
+
+Wait-Video "executar o CENARIO 9 - HPA / Auto Scaling"
+Write-Scenario `
+    -Numero 9 `
+    -Titulo "HPA / AUTO SCALING" `
+    -Objetivo "Gerar carga no microsservico e comprovar o aumento automatico de replicas pelo Horizontal Pod Autoscaler."
+
+$hpaLoadPodNames = @()
+
+try {
+    Write-Host "HPAs configurados no namespace:" -ForegroundColor Yellow
+    & kubectl get hpa -n $Namespace
+    Write-Host ""
+
+    $hpaList = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "hpa", "-n", $Namespace, "-o", "json")
+
+    if (-not $hpaList -or @($hpaList.items).Count -eq 0) {
+        throw "Nenhum HPA encontrado no namespace '$Namespace'."
+    }
+
+    # Para a demonstracao, prioriza o Evaluation porque o endpoint /evaluate
+    # gera trabalho suficiente para demonstrar o scale-out.
+    $hpa = @(
+        $hpaList.items |
+            Where-Object { $_.spec.scaleTargetRef.name -eq "evaluation-service" }
+    ) | Select-Object -First 1
+
+    if (-not $hpa) {
+        $hpa = @($hpaList.items) | Select-Object -First 1
+        Write-Warn "Nao encontrei HPA do evaluation-service. O teste usara o primeiro HPA disponivel."
+    }
+
+    $hpaName = [string]$hpa.metadata.name
+    $targetDeployment = [string]$hpa.spec.scaleTargetRef.name
+    $minReplicas = if ($null -ne $hpa.spec.minReplicas) { [int]$hpa.spec.minReplicas } else { 1 }
+    $maxReplicas = [int]$hpa.spec.maxReplicas
+
+    if ([string]::IsNullOrWhiteSpace($hpaName) -or [string]::IsNullOrWhiteSpace($targetDeployment)) {
+        throw "Nao foi possivel identificar o HPA ou seu Deployment alvo."
+    }
+
+    Write-Host "HPA selecionado:    $hpaName"
+    Write-Host "Deployment alvo:   $targetDeployment"
+    Write-Host "Min replicas:      $minReplicas"
+    Write-Host "Max replicas:      $maxReplicas"
+    Write-Host "Pods de carga:     $HpaLoadPods"
+    Write-Host "Tempo maximo:      $HpaMaxWaitSeconds segundos"
+    Write-Host ""
+
+    # Confirma se o HPA esta conseguindo calcular as metricas antes da carga.
+    $hpaStatus = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "hpa", $hpaName, "-n", $Namespace, "-o", "json")
+
+    $scalingActiveCondition = @(
+        $hpaStatus.status.conditions |
+            Where-Object { $_.type -eq "ScalingActive" }
+    ) | Select-Object -First 1
+
+    if ($scalingActiveCondition -and $scalingActiveCondition.status -eq "False") {
+        throw "HPA sem metricas ativas. Motivo: $($scalingActiveCondition.reason) - $($scalingActiveCondition.message)"
+    }
+
+    $deployment = Invoke-NativeJson `
+        -Command "kubectl" `
+        -Arguments @("get", "deployment", $targetDeployment, "-n", $Namespace, "-o", "json")
+
+    if (-not $deployment) {
+        throw "Deployment '$targetDeployment' nao encontrado."
+    }
+
+    $replicasAntes = if ($deployment.status.replicas) { [int]$deployment.status.replicas } else { 0 }
+    $readyAntes = if ($deployment.status.readyReplicas) { [int]$deployment.status.readyReplicas } else { 0 }
+
+    Write-Host "Replicas antes da carga: $replicasAntes (Ready: $readyAntes)" -ForegroundColor Cyan
+    Write-Host ""
+
+    # O endpoint interno evita depender do Ingress durante o teste de carga.
+    if ($targetDeployment -eq "evaluation-service") {
+        $targetUrl = "http://evaluation-service-svc:8080/evaluate?user_id=hpa-load-`$i&flag_name=$FlagName"
+        $loadCommand = 'i=0; while true; do i=$((i+1)); wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; done'
+    }
+    else {
+        $serviceName = "$targetDeployment-svc"
+        $targetUrl = "http://${serviceName}:8080/health"
+        $loadCommand = 'while true; do wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; done'
+    }
+
+    Write-Host "Gerando carga interna contra: $targetUrl" -ForegroundColor Yellow
+
+    for ($i = 1; $i -le $HpaLoadPods; $i++) {
+        $podName = "hpa-load-$i-" + (Get-Random -Minimum 1000 -Maximum 9999)
+        $hpaLoadPodNames += $podName
+
+        & kubectl run $podName `
+            -n $Namespace `
+            --restart=Never `
+            --image=busybox:1.36 `
+            --command `
+            -- /bin/sh -c $loadCommand | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao criar o Pod gerador de carga '$podName'."
+        }
+    }
+
+    Write-Ok "$HpaLoadPods Pods de carga criados."
+    Write-Host "Aguardando o HPA detectar aumento de utilizacao..." -ForegroundColor Yellow
+    Write-Host ""
+
+    $scaled = $false
+    $replicasDepois = $replicasAntes
+    $desiredDepois = $replicasAntes
+    $inicioHpa = Get-Date
+
+    while (((Get-Date) - $inicioHpa).TotalSeconds -lt $HpaMaxWaitSeconds) {
+        Start-Sleep -Seconds 10
+
+        $currentHpa = Invoke-NativeJson `
+            -Command "kubectl" `
+            -Arguments @("get", "hpa", $hpaName, "-n", $Namespace, "-o", "json")
+
+        $currentDeployment = Invoke-NativeJson `
+            -Command "kubectl" `
+            -Arguments @("get", "deployment", $targetDeployment, "-n", $Namespace, "-o", "json")
+
+        if (-not $currentHpa -or -not $currentDeployment) {
+            continue
+        }
+
+        $currentReplicas = if ($currentHpa.status.currentReplicas) { [int]$currentHpa.status.currentReplicas } else { 0 }
+        $desiredReplicas = if ($currentHpa.status.desiredReplicas) { [int]$currentHpa.status.desiredReplicas } else { 0 }
+        $readyReplicas = if ($currentDeployment.status.readyReplicas) { [int]$currentDeployment.status.readyReplicas } else { 0 }
+
+        $metricText = ""
+        if ($currentHpa.status.currentMetrics) {
+            try {
+                $metric = @($currentHpa.status.currentMetrics)[0]
+                if ($metric.resource.current.averageUtilization) {
+                    $metricText = " | CPU: $($metric.resource.current.averageUtilization)%"
+                }
+                elseif ($metric.resource.current.averageValue) {
+                    $metricText = " | Metrica: $($metric.resource.current.averageValue)"
+                }
+            }
+            catch {
+                $metricText = ""
+            }
+        }
+
+        Write-Host ("HPA -> Current: {0} | Desired: {1} | Ready: {2}{3}" -f `
+            $currentReplicas, $desiredReplicas, $readyReplicas, $metricText)
+
+        $replicasDepois = $currentReplicas
+        $desiredDepois = $desiredReplicas
+
+        if ($desiredReplicas -gt $replicasAntes -or $currentReplicas -gt $replicasAntes) {
+            $scaled = $true
+            break
+        }
+    }
+
+    Write-Host ""
+
+    if (-not $scaled) {
+        Write-Warn "O HPA nao aumentou replicas dentro do tempo de teste."
+        Write-Host "Diagnostico do HPA:" -ForegroundColor Yellow
+        & kubectl describe hpa $hpaName -n $Namespace
+        throw "HPA nao executou scale-out em ate $HpaMaxWaitSeconds segundos."
+    }
+
+    Write-Ok "Scale-out identificado pelo HPA."
+    Write-Host "Replicas antes:   $replicasAntes"
+    Write-Host "Current replicas: $replicasDepois"
+    Write-Host "Desired replicas: $desiredDepois"
+    Write-Host ""
+    Write-Host "Estado atual do HPA:" -ForegroundColor Yellow
+    & kubectl get hpa $hpaName -n $Namespace
+
+    Add-Resultado `
+        "9 - HPA / Auto Scaling" `
+        $true `
+        "Scale-out confirmado: $replicasAntes -> desired $desiredDepois replicas"
+}
+catch {
+    Write-Fail $_.Exception.Message
+    Add-Resultado "9 - HPA / Auto Scaling" $false $_.Exception.Message
+}
+finally {
+    if ($hpaLoadPodNames.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Removendo Pods geradores de carga..." -ForegroundColor Yellow
+
+        foreach ($podName in $hpaLoadPodNames) {
+            & kubectl delete pod $podName `
+                -n $Namespace `
+                --ignore-not-found=true `
+                --wait=false `
+                2>$null | Out-Null
+        }
+
+        Write-Ok "Carga removida. O HPA podera reduzir as replicas apos o periodo de estabilizacao."
+    }
 }
 
 # ==============================================================
