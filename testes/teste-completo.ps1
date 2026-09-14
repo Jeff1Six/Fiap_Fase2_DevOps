@@ -158,12 +158,23 @@ function Get-IngressRoutes {
             $hostName = $address
         }
 
+        # O Ingress atual esta publicado apenas em HTTP/porta 80.
+        # Quando rule.host e spec.tls sao nulos, o PowerShell pode considerar
+        # "$null -contains $null" como verdadeiro e selecionar HTTPS por engano.
+        # Portanto, so usamos HTTPS quando existir configuracao TLS real.
         $scheme = "http"
 
-        foreach ($tls in @($ingress.spec.tls)) {
-            if (@($tls.hosts) -contains $rule.host) {
-                $scheme = "https"
+        $tlsEntries = @(
+            $ingress.spec.tls | Where-Object {
+                $null -ne $_ -and (
+                    -not [string]::IsNullOrWhiteSpace([string]$_.secretName) -or
+                    @($_.hosts | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0
+                )
             }
+        )
+
+        if ($tlsEntries.Count -gt 0) {
+            $scheme = "https"
         }
 
         foreach ($pathItem in @($rule.http.paths)) {
@@ -497,6 +508,12 @@ try {
 
     $script:Routes = Get-IngressRoutes
     Write-Ok "Ingress encontrado: $script:IngressAddress"
+
+    $firstRoute = $script:Routes.Values | Select-Object -First 1
+    if ($firstRoute) {
+        $protocol = (($firstRoute.BaseUrl -split ':')[0]).ToUpper()
+        Write-Ok "Protocolo externo detectado: $protocol"
+    }
 }
 catch {
     Write-Fail $_.Exception.Message
@@ -514,7 +531,10 @@ Write-Scenario `
     -Objetivo "Comprovar que os cinco microsservicos estao implantados e disponiveis."
 
 try {
-    & kubectl get pods -n $Namespace -o wide
+    & kubectl get pods `
+        -n $Namespace `
+        -l 'app in (analytics-service,auth-service,evaluation-service,flag-service,targeting-service)' `
+        -o wide
     Write-Host ""
     & kubectl get svc -n $Namespace
     Write-Host ""
