@@ -26,6 +26,7 @@ $script:Routes = @{}
 $script:IngressAddress = $null
 $script:EvaluationUrl = $null
 $script:InicioTeste = Get-Date
+$script:MasterKey = $MasterKey
 
 function Write-Banner {
     Clear-Host
@@ -341,15 +342,8 @@ function Get-PlainTextFromSecureString {
 }
 
 function Ensure-MasterKey {
-    if (-not [string]::IsNullOrWhiteSpace($script:MasterKey)) {
-        return
-    }
-
-    $secure = Read-Host "Informe a Master Key do auth-service" -AsSecureString
-    $script:MasterKey = Get-PlainTextFromSecureString -SecureString $secure
-
     if ([string]::IsNullOrWhiteSpace($script:MasterKey)) {
-        throw "Master Key nao informada."
+        throw "Master Key nao configurada no script."
     }
 }
 
