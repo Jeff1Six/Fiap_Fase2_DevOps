@@ -207,7 +207,7 @@ def sqs_worker_loop():
             time.sleep(10)
 
 
-# --- Servidor Flask (Apenas para Health Check) ---
+# --- Servidor Flask (Apenas para Health Check) ----
 
 app = Flask(__name__)
 
