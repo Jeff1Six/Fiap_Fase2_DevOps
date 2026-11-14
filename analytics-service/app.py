@@ -6,6 +6,7 @@ import uuid
 import time
 import logging
 
+import app
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
 from dotenv import load_dotenv
