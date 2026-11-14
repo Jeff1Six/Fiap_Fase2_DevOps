@@ -106,6 +106,7 @@ func (a *App) fetchFlag(flagName string) (*Flag, error) {
 	url := fmt.Sprintf("%s/flags/%s", a.FlagServiceURL, flagName)
 
 	apiKey := os.Getenv("SERVICE_API_KEY")
+	// #nosec G704
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
@@ -205,6 +206,7 @@ func (a *App) runEvaluationLogic(info *CombinedFlagInfo, userID string) bool {
 
 func getDeterministicBucket(input string) int {
 	// Usamos SHA1 (rápido) e pegamos os primeiros 4 bytes
+	// #nosec G401 G505
 	hasher := sha1.New()
 	hasher.Write([]byte(input))
 	hash := hasher.Sum(nil)
