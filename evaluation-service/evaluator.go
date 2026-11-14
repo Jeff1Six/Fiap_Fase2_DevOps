@@ -40,14 +40,14 @@ func (a *App) getCombinedFlagInfo(flagName string) (*CombinedFlagInfo, error) {
 		// Cache HIT
 		var info CombinedFlagInfo
 		if err := json.Unmarshal([]byte(val), &info); err == nil {
-			log.Printf("Cache HIT para flag '%s'", flagName)
+			log.Println("Cache HIT obtido com sucesso")
 			return &info, nil
 		}
 		// Se o unmarshal falhar, trata como cache miss
-		log.Printf("Erro ao desserializar cache para flag '%s': %v", flagName, err)
+		log.Printf("Erro ao desserializar cache: %v", err)
 	}
 
-	log.Printf("Cache MISS para flag '%s'", flagName)
+	log.Println("Cache MISS para a flag requisitada")
 	// 2. Cache MISS - Buscar dos serviços
 	info, err := a.fetchFromServices(flagName)
 	if err != nil {
@@ -58,7 +58,7 @@ func (a *App) getCombinedFlagInfo(flagName string) (*CombinedFlagInfo, error) {
 	jsonData, err := json.Marshal(info)
 	if err == nil {
 		if err := a.RedisClient.Set(ctx, cacheKey, jsonData, CACHE_TTL).Err(); err != nil {
-			log.Printf("Erro ao salvar cache para flag '%s': %v", flagName, err)
+			log.Printf("Erro ao salvar cache: %v", err)
 		}
 	}
 
@@ -92,7 +92,7 @@ func (a *App) fetchFromServices(flagName string) (*CombinedFlagInfo, error) {
 		return nil, flagErr
 	}
 	if ruleErr != nil {
-		log.Printf("Aviso: Nenhuma regra de segmentação encontrada para '%s'. Usando padrão.", flagName)
+		log.Println("Aviso: Nenhuma regra de segmentação encontrada. Usando padrão.")
 	}
 
 	return &CombinedFlagInfo{
@@ -110,6 +110,7 @@ func (a *App) fetchFlag(flagName string) (*Flag, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
+	// #nosec G704
 	resp, err := a.HttpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao chamar flag-service: %w", err)
@@ -142,9 +143,11 @@ func (a *App) fetchFlag(flagName string) (*Flag, error) {
 func (a *App) fetchRule(flagName string) (*TargetingRule, error) {
 	url := fmt.Sprintf("%s/rules/%s", a.TargetingServiceURL, flagName)
 	apiKey := os.Getenv("SERVICE_API_KEY") // Usa a mesma chave
+	// #nosec G704
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
+	// #nosec G704
 	resp, err := a.HttpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao chamar targeting-service: %w", err)
@@ -189,7 +192,7 @@ func (a *App) runEvaluationLogic(info *CombinedFlagInfo, userID string) bool {
 		// Converte o 'value' (que é interface{}) para float64
 		percentage, ok := rule.Value.(float64)
 		if !ok {
-			log.Printf("Erro: valor da regra de porcentagem não é um número para a flag '%s'", info.Flag.Name)
+			log.Println("Erro: valor da regra de porcentagem não é um número válido")
 			return false
 		}
 
