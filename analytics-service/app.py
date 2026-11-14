@@ -6,22 +6,22 @@ import uuid
 import time
 import logging
 
-import app
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
 from dotenv import load_dotenv
 from flask import Flask, jsonify
 
-
 # Configura o logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 log = logging.getLogger(__name__)
 
 # Carrega .env para desenvolvimento local
 load_dotenv()
+
+# --- Inicialização do Flask ---
+app = Flask(__name__)
 
 # --- Configuração ---
 AWS_REGION = os.getenv("AWS_REGION")
@@ -39,7 +39,6 @@ if not all([AWS_REGION, SQS_QUEUE_URL, DYNAMODB_TABLE_NAME]):
     sys.exit(1)
 
 # --- Clientes Boto3 ---
-# Criamos a sessão uma vez
 try:
     session = boto3.Session(region_name=AWS_REGION)
 
@@ -79,10 +78,8 @@ except Exception as e:
 
 # --- SQS Worker ---
 
-
 def process_message(message):
     """Processa uma única mensagem SQS e a insere no DynamoDB."""
-
     try:
         log.info(
             "Processando mensagem ID: %s",
@@ -91,10 +88,8 @@ def process_message(message):
 
         body = json.loads(message["Body"])
 
-        # Gera um ID único para o item no DynamoDB
         event_id = str(uuid.uuid4())
 
-        # Constrói o item no formato do DynamoDB
         item = {
             "event_id": {
                 "S": event_id,
@@ -113,7 +108,6 @@ def process_message(message):
             },
         }
 
-        # Insere no DynamoDB
         dynamodb_client.put_item(
             TableName=DYNAMODB_TABLE_NAME,
             Item=item,
@@ -125,7 +119,6 @@ def process_message(message):
             body["flag_name"],
         )
 
-        # Se tudo deu certo, deleta a mensagem da fila
         sqs_client.delete_message(
             QueueUrl=SQS_QUEUE_URL,
             ReceiptHandle=message["ReceiptHandle"],
@@ -137,17 +130,12 @@ def process_message(message):
             message["MessageId"],
         )
 
-        # Não deleta a mensagem, pode ser uma "poison pill"
-
     except ClientError as e:
         log.error(
-            "Erro do Boto3 (DynamoDB ou SQS) "
-            "ao processar %s: %s",
+            "Erro do Boto3 (DynamoDB ou SQS) ao processar %s: %s",
             message["MessageId"],
             e,
         )
-
-        # Não deleta a mensagem, tenta novamente
 
     except Exception as e:
         log.error(
@@ -156,17 +144,13 @@ def process_message(message):
             e,
         )
 
-        # Não deleta a mensagem, tenta novamente
-
 
 def sqs_worker_loop():
     """Loop principal do worker que ouve a fila SQS."""
-
     log.info("Iniciando o worker SQS...")
 
     while True:
         try:
-            # Long-polling: espera até 20s por mensagens
             response = sqs_client.receive_message(
                 QueueUrl=SQS_QUEUE_URL,
                 MaxNumberOfMessages=10,
@@ -179,7 +163,6 @@ def sqs_worker_loop():
             )
 
             if not messages:
-                # Nenhuma mensagem, continua o loop
                 continue
 
             log.info(
@@ -195,8 +178,6 @@ def sqs_worker_loop():
                 "Erro do Boto3 no loop principal do SQS: %s",
                 e,
             )
-
-            # Pausa antes de tentar novamente
             time.sleep(10)
 
         except Exception as e:
@@ -204,12 +185,11 @@ def sqs_worker_loop():
                 "Erro inesperado no loop principal do SQS: %s",
                 e,
             )
-
             time.sleep(10)
+
 
 @app.route("/health")
 def health():
-    # Uma verificação de saúde real poderia checar DynamoDB/SQSa
     return jsonify(
         {
             "status": "ok",
@@ -219,20 +199,16 @@ def health():
 
 # --- Inicialização ---
 
-
 def start_worker():
     """Inicia o worker SQS em uma thread separada."""
-
     worker_thread = threading.Thread(
         target=sqs_worker_loop,
         daemon=True,
     )
-
     worker_thread.start()
 
 
-# Inicia o worker SQS em uma thread de background.
-# Isso garante que inicie com 'flask run' ou 'gunicorn'.
+# Inicia o worker SQS em background
 start_worker()
 
 
@@ -245,7 +221,7 @@ if __name__ == "__main__":
     )
 
     app.run(
-        host="0.0.0.0",  # nosec B104 - necessário para container/Kubernetes
+        host="0.0.0.0",  # nosec B104
         port=port,
         debug=False,
     )
