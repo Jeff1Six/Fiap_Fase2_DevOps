@@ -50,7 +50,7 @@ func (a *App) validateKeyHandler(w http.ResponseWriter, r *http.Request) {
 	).Scan(&id)
 
 	if err != nil {
-		log.Printf("Falha na validação da chave (hash: %s...): %v", keyHash[:6], err)
+		log.Printf("Falha na validação da chave: %v", err)
 		http.Error(w, "Chave de API inválida ou inativa", http.StatusUnauthorized)
 		return
 	}
