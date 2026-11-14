@@ -1,5 +1,5 @@
-eks_cluster_role_arn = "arn:aws:iam::596081564794:role/LabRole"
-eks_node_role_arn    = "arn:aws:iam::596081564794:role/LabRole"
+eks_cluster_role_arn = "arn:aws:iam::797332046614:role/LabRole"
+eks_node_role_arn    = "arn:aws:iam::797332046614:role/LabRole"
 kubernetes_version   = "1.35"
 
 databases = {

@@ -206,12 +206,6 @@ def sqs_worker_loop():
 
             time.sleep(10)
 
-
-# --- Servidor Flask (Apenas para Health Check) -----
-
-app = Flask(__name__)
-
-
 @app.route("/health")
 def health():
     # Uma verificação de saúde real poderia checar DynamoDB/SQSa

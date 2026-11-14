@@ -105,7 +105,7 @@ resource "aws_eip" "nat" {
   tags = {
     Name = "${var.project_name}-${var.environment}-nat-eip"
   }
-}
+} 
 
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
