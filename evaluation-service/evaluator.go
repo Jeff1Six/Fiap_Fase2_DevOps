@@ -1,6 +1,7 @@
 package main
 
 import (
+	// #nosec G505
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/json"
