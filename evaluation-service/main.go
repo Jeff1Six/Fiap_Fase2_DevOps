@@ -86,7 +86,7 @@ func main() {
 		if sqsEndpoint != "" {
 			awsConfig.Endpoint = aws.String(sqsEndpoint)
 			awsConfig.S3ForcePathStyle = aws.Bool(true)
-			log.Printf("Usando endpoint SQS customizado: %s", sqsEndpoint)
+			log.Printf("Usando endpoint SQS customizado configurado")
 		}
 
 		sess, err := session.NewSession(awsConfig)
@@ -118,8 +118,16 @@ func main() {
 	mux.HandleFunc("/health", app.healthHandler)
 	mux.HandleFunc("/evaluate", app.evaluationHandler)
 
-	log.Printf("Serviço de Avaliação (Go) rodando na porta %s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	log.Printf("Serviço de Avaliação (Go) rodando na porta configurada")
+	server := &http.Server{
+		Addr:         ":" + port,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
