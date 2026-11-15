@@ -1,0 +1,30 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: togglemaster-service-alerts
+  namespace: monitoring
+  labels:
+    release: togglemaster-monitoring
+spec:
+  groups:
+  - name: togglemaster.availability
+    rules:
+    - alert: ToggleMasterDeploymentUnavailable
+      expr: kube_deployment_spec_replicas{namespace="desafio3"} > kube_deployment_status_replicas_available{namespace="desafio3"}
+      for: 5m
+      labels:
+        severity: warning
+        team: togglemaster
+      annotations:
+        summary: 'Deployment com réplicas indisponíveis: {{ $labels.deployment }}'
+        description: O deployment {{ $labels.deployment }} no namespace desafio3 possui menos réplicas disponíveis que o desejado por
+          5 minutos.
+    - alert: ToggleMasterContainerRestarts
+      expr: increase(kube_pod_container_status_restarts_total{namespace="desafio3"}[15m]) > 0
+      for: 1m
+      labels:
+        severity: warning
+        team: togglemaster
+      annotations:
+        summary: 'Reinício de contêiner detectado: {{ $labels.pod }}'
+        description: O contêiner {{ $labels.container }} reiniciou nos últimos 15 minutos no namespace desafio3.
