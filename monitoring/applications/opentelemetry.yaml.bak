@@ -1,0 +1,74 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-otel
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
+    chart: opentelemetry-collector
+    targetRevision: 0.178.2
+    helm:
+      releaseName: togglemaster-otel
+      values: |
+        mode: deployment
+        replicaCount: 1
+        image:
+          repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s
+        command:
+          name: otelcol-k8s
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi
+        ports:
+          jaeger-compact:
+            enabled: false
+          jaeger-thrift:
+            enabled: false
+          jaeger-grpc:
+            enabled: false
+          zipkin:
+            enabled: false
+        config:
+          receivers:
+            jaeger: null
+            zipkin: null
+            prometheus: null
+            otlp:
+              protocols:
+                grpc:
+                  endpoint: ${env:MY_POD_IP}:4317
+                http:
+                  endpoint: ${env:MY_POD_IP}:4318
+          processors:
+            memory_limiter:
+              check_interval: 5s
+              limit_percentage: 80
+              spike_limit_percentage: 25
+            batch: {}
+          exporters:
+            debug:
+              verbosity: basic
+          service:
+            pipelines:
+              logs: null
+              metrics: null
+              traces:
+                receivers: [otlp]
+                processors: [memory_limiter, batch]
+                exporters: [debug]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

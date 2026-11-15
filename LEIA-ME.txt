@@ -1,0 +1,17 @@
+ToggleMaster - Fase 4 / etapa 1: Collector OTLP (traces)
+
+1) Copie monitoring/applications/opentelemetry.yaml para a mesma pasta no repositorio.
+2) Edite argocd/monitoring-app.yaml; acrescente opentelemetry.yaml a lista EXISTENTE de source.directory.include. Nao remova nomes.
+3) git add argocd/monitoring-app.yaml monitoring/applications/opentelemetry.yaml
+   git commit -m "feat: adicionar OpenTelemetry Collector ao GitOps"
+   git push origin main
+   kubectl apply -f .\argocd\monitoring-app.yaml
+   kubectl annotate application togglemaster-monitoring-apps -n argocd argocd.argoproj.io/refresh=hard --overwrite
+4) kubectl get applications -n argocd
+   kubectl get pods -n monitoring | Select-String "otel"
+   kubectl get svc -n monitoring | Select-String "otel"
+
+O Collector inicial usa exporter debug somente para validar recebimento de traces. NAO envia dados para New Relic ainda.
+A fase seguinte instrumenta os 5 servicos e configura exportador OTLP/HTTP do New Relic com um Kubernetes Secret privado; nunca commitar a chave.
+O nome do Service depende do chart, verificar via kubectl antes de definir OTEL_EXPORTER_OTLP_ENDPOINT nos Deployments.
+Se o chart Helm reportar problema de versao/compatibilidade, testar helm template local e ajustar antes de instalar.
