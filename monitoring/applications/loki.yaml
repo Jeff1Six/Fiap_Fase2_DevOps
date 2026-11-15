@@ -73,12 +73,12 @@ spec:
           enabled: false
         lokiCanary:
           enabled: false
+        test:
+          enabled: false
         minio:
           enabled: false
         gateway:
           enabled: true
-        test
-          enabled: false
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring
