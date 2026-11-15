@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-monitoring
+  namespace: argocd
+spec:
+  project: default
+  sources:
+  - repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 92.9.0
+    helm:
+      releaseName: togglemaster-monitoring
+      valueFiles:
+      - $values/monitoring/prometheus/values.yaml
+  - repoURL: https://github.com/Jeff1Six/Fiap_Fase2_DevOps.git
+    targetRevision: main
+    ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+    - ClientSideApplyMigration=false
+    - SkipDryRunOnMissingResource=true
