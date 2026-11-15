@@ -105,7 +105,7 @@ resource "aws_eip" "nat" {
   tags = {
     Name = "${var.project_name}-${var.environment}-nat-eip"
   }
-} 
+}
 
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
@@ -244,6 +244,11 @@ resource "aws_eks_cluster" "main" {
   role_arn = var.eks_cluster_role_arn
   version  = var.kubernetes_version
 
+  # Necessario para usar EKS Access Entries com identidade por Instance ID.
+  access_config {
+    authentication_mode = "API_AND_CONFIG_MAP"
+  }
+
   vpc_config {
     subnet_ids              = [aws_subnet.private_a.id, aws_subnet.private_b.id]
     endpoint_private_access = true
@@ -264,6 +269,17 @@ resource "aws_eks_node_group" "main" {
   subnet_ids      = [aws_subnet.private_a.id, aws_subnet.private_b.id]
   instance_types  = ["t3.medium"]
   capacity_type   = "ON_DEMAND"
+
+  # Os nodes novos sempre usam o template com configuracao do nodeadm e IMDSv2.
+  launch_template {
+    id      = aws_launch_template.eks_nodes.id
+    version = aws_launch_template.eks_nodes.latest_version
+  }
+
+  # Precisa haver identidade EC2 com username system:node:{{SessionName}}.
+  # ATENCAO: EKS Managed Node Groups podem criar uma entrada automaticamente.
+  # Verificar eventuais conflitos de principal ARN antes do apply.
+  depends_on = [aws_eks_access_entry.nodes]
 
   scaling_config {
     desired_size = 2
@@ -287,6 +303,27 @@ resource "aws_eks_node_group" "main" {
 
 resource "aws_launch_template" "eks_nodes" {
   name_prefix = "${var.project_name}-${var.environment}-eks-nodes-"
+
+  # AL2023: elimina a necessidade de ec2:DescribeInstances para descobrir
+  # o nome privado do node, bloqueada pela SCP do AWS Academy.
+  # O EKS adiciona os seus dados padrao ao user_data na AMI gerenciada.
+  user_data = base64encode(<<-EOT
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="NODECONFIG"
+
+--NODECONFIG
+Content-Type: application/node.eks.aws
+
+---
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  featureGates:
+    InstanceIdNodeName: true
+
+--NODECONFIG--
+EOT
+  )
 
   # Necessário para os Pods acessarem a IAM Role do Node via IMDSv2.
   # HopLimit = 1 permite acesso apenas a partir da própria EC2.
@@ -315,6 +352,18 @@ resource "aws_launch_template" "eks_nodes" {
     Environment = var.environment
     ManagedBy   = "Terraform"
   }
+}
+
+# ------------------------------------------------------------------------------
+# EKS ACCESS ENTRY - identidade do node por Instance ID
+# ------------------------------------------------------------------------------
+# O nodeadm com InstanceIdNodeName espera system:node:{{SessionName}}.
+# O tipo EC2 gera esse padrao. A criacao pode ser limitada pela LabRole,
+# ou conflitar com uma entrada automatica de Managed Node Group.
+resource "aws_eks_access_entry" "nodes" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = var.eks_node_role_arn
+  type          = "EC2"
 }
 
 # ------------------------------------------------------------------------------
