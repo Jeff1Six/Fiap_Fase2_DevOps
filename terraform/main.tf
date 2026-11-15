@@ -524,6 +524,18 @@ resource "helm_release" "argocd" {
   ]
 }
 
+# ------------------------------------------------------------------------------
+# MONITORAMENTO
+# ------------------------------------------------------------------------------
+
+resource "kubectl_manifest" "togglemaster_monitoring_apps" {
+  yaml_body = file("${path.module}/../argocd/monitoring-app.yaml")
+
+  depends_on = [
+    helm_release.argocd
+  ]
+}
+
 resource "aws_dynamodb_table" "analytics" {
   name         = "ToggleMasterAnalytics"
   billing_mode = "PAY_PER_REQUEST"

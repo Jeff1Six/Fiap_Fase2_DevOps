@@ -11,6 +11,11 @@ alertmanager:
 
 grafana:
   enabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: monitoring
 
   admin:
     existingSecret: ""

@@ -17,6 +17,9 @@ spec:
     server: https://kubernetes.default.svc
     namespace: argocd
 
+  directory:
+    include: "{prometheus.yaml,dashboard-togglemaster.yaml}"
+
   syncPolicy:
     automated:
       prune: false
