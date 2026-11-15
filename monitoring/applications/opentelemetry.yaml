@@ -34,6 +34,12 @@ spec:
             enabled: false
           zipkin:
             enabled: false
+        extraEnvs:
+          - name: NEW_RELIC_LICENSE_KEY
+            valueFrom:
+              secretKeyRef:
+                name: newrelic-credentials
+                key: license-key
         config:
           receivers:
             jaeger: null
@@ -54,6 +60,11 @@ spec:
           exporters:
             debug:
               verbosity: basic
+            otlp_http/newrelic:
+              endpoint: https://otlp.nr-data.net
+              headers:
+                api-key: ${env:NEW_RELIC_LICENSE_KEY}
+              compression: gzip
           service:
             pipelines:
               logs: null
@@ -61,7 +72,7 @@ spec:
               traces:
                 receivers: [otlp]
                 processors: [memory_limiter, batch]
-                exporters: [debug]
+                exporters: [debug, otlp_http/newrelic]
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring
