@@ -320,7 +320,7 @@ spec:
               \ trigger_set_timestamp();\n\"\n"
       containers:
         - name: targeting-service
-          image: 797332046614.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:0d2103e19de1897fa456bc93f5ec239650ac431d
+          image: 797332046614.dkr.ecr.us-east-1.amazonaws.com/togglemaster-targeting-service:c687070a47ba3cc98a792e15bd599dd70e31159f
           ports:
             - containerPort: 8003
           env:
