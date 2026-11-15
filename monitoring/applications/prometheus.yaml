@@ -1,1 +1,38 @@
-﻿# ToggleMaster Fase 4 - Configuracao pendente
+﻿<CodeBlock language="powershell" editable>
+$application = @'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-monitoring
+  namespace: argocd
+spec:
+  project: default
+
+sources:
+
+- repoURL: https://prometheus-community.github.io/helm-charts
+chart: kube-prometheus-stack
+targetRevision: 92.9.0
+helm:
+releaseName: togglemaster-monitoring
+valueFiles:
+- $values/monitoring/prometheus/values.yaml
+
+- repoURL: https://github.com/Jeff1Six/Fiap_Fase2_DevOps.git
+targetRevision: main
+ref: values
+
+destination:
+server: https://kubernetes.default.svc
+namespace: monitoring
+
+syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+'@
+
+Set-Content `
+  -Path "monitoring/applications/prometheus.yaml" `
+  -Value $application `
+  -Encoding UTF8

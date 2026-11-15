@@ -1,1 +1,80 @@
-﻿# ToggleMaster Fase 4 - Configuracao pendente
+﻿# ToggleMaster - Fase 4
+# Prometheus + Grafana - AWS Academy
+
+fullnameOverride: togglemaster-monitoring
+
+defaultRules:
+  create: false
+
+alertmanager:
+  enabled: false
+
+grafana:
+  enabled: true
+
+  admin:
+    existingSecret: ""
+
+  service:
+    type: ClusterIP
+
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+prometheus:
+  enabled: true
+
+  prometheusSpec:
+    replicas: 1
+    retention: 6h
+
+    # Armazenamento temporario nesta etapa
+    storageSpec:
+      emptyDir:
+        sizeLimit: 2Gi
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 768Mi
+
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+kubeEtcd:
+  enabled: false
+
+kubeControllerManager:
+  enabled: false
+
+kubeScheduler:
+  enabled: false
+
+kubeProxy:
+  enabled: false

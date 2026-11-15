@@ -1,1 +1,25 @@
-﻿# ToggleMaster Fase 4 - Configuracao pendente
+﻿apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster-monitoring-apps
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Jeff1Six/Fiap_Fase2_DevOps.git
+    targetRevision: main
+    path: monitoring/applications
+    directory:
+      include: prometheus.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
