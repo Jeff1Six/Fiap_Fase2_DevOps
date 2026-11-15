@@ -18,6 +18,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+from otel_setup import instrument_app
+instrument_app(app, "flag-service")
+
 # --- Configuração ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL")

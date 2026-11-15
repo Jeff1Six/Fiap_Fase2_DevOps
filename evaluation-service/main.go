@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"context"
 	"log"
 	"net/http"
@@ -28,7 +29,17 @@ type App struct {
 }
 
 func main() {
-	_ = godotenv.Load() // Carrega .env para dev local
+	_ = godotenv.Load()
+
+	shutdownOTel, err := iniciarOpenTelemetry("evaluation-service")
+	if err != nil {
+		log.Fatalf("Erro ao iniciar OpenTelemetry: %v", err)
+	}
+	defer func() {
+		if err := shutdownOTel(context.Background()); err != nil {
+			log.Printf("Erro ao finalizar OpenTelemetry: %v", err)
+		}
+	}() // Carrega .env para dev local
 
 	// --- Configuração ---
 	port := os.Getenv("PORT")
@@ -101,6 +112,7 @@ func main() {
 	// Cliente HTTP (com timeout)
 	httpClient := &http.Client{
 		Timeout: 5 * time.Second,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	}
 
 	// Cria a instância da App
@@ -121,7 +133,7 @@ func main() {
 	log.Printf("Serviço de Avaliação (Go) rodando na porta configurada")
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      otelhttp.NewHandler(mux, "evaluation-service"),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,

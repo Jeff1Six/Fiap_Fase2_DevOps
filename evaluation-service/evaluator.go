@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	// #nosec G505
 	"crypto/sha1"
 	"encoding/binary"
@@ -20,9 +21,9 @@ const (
 )
 
 // getDecision é o wrapper principal
-func (a *App) getDecision(userID, flagName string) (bool, error) {
+func (a *App) getDecision(requestCtx context.Context, userID, flagName string) (bool, error) {
 	// 1. Obter os dados da flag (do cache ou dos serviços)
-	info, err := a.getCombinedFlagInfo(flagName)
+	info, err := a.getCombinedFlagInfo(requestCtx, flagName)
 	if err != nil {
 		return false, err
 	}
@@ -32,11 +33,11 @@ func (a *App) getDecision(userID, flagName string) (bool, error) {
 }
 
 // getCombinedFlagInfo busca os dados no Redis, com fallback para os microsserviços
-func (a *App) getCombinedFlagInfo(flagName string) (*CombinedFlagInfo, error) {
+func (a *App) getCombinedFlagInfo(requestCtx context.Context, flagName string) (*CombinedFlagInfo, error) {
 	cacheKey := fmt.Sprintf("flag_info:%s", flagName)
 
 	// 1. Tentar buscar do Cache (Redis)
-	val, err := a.RedisClient.Get(ctx, cacheKey).Result()
+	val, err := a.RedisClient.Get(requestCtx, cacheKey).Result()
 	if err == nil {
 		// Cache HIT
 		var info CombinedFlagInfo
@@ -50,7 +51,7 @@ func (a *App) getCombinedFlagInfo(flagName string) (*CombinedFlagInfo, error) {
 
 	log.Println("Cache MISS para a flag requisitada")
 	// 2. Cache MISS - Buscar dos serviços
-	info, err := a.fetchFromServices(flagName)
+	info, err := a.fetchFromServices(requestCtx, flagName)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +59,7 @@ func (a *App) getCombinedFlagInfo(flagName string) (*CombinedFlagInfo, error) {
 	// 3. Salvar no Cache
 	jsonData, err := json.Marshal(info)
 	if err == nil {
-		if err := a.RedisClient.Set(ctx, cacheKey, jsonData, CACHE_TTL).Err(); err != nil {
+		if err := a.RedisClient.Set(requestCtx, cacheKey, jsonData, CACHE_TTL).Err(); err != nil {
 			log.Printf("Erro ao salvar cache: %v", err)
 		}
 	}
@@ -67,7 +68,7 @@ func (a *App) getCombinedFlagInfo(flagName string) (*CombinedFlagInfo, error) {
 }
 
 // fetchFromServices busca dados do flag-service e targeting-service concorrentemente
-func (a *App) fetchFromServices(flagName string) (*CombinedFlagInfo, error) {
+func (a *App) fetchFromServices(requestCtx context.Context, flagName string) (*CombinedFlagInfo, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -78,13 +79,13 @@ func (a *App) fetchFromServices(flagName string) (*CombinedFlagInfo, error) {
 	// Goroutine 1: Buscar do flag-service
 	go func() {
 		defer wg.Done()
-		flagInfo, flagErr = a.fetchFlag(flagName)
+		flagInfo, flagErr = a.fetchFlag(requestCtx, flagName)
 	}()
 
 	// Goroutine 2: Buscar do targeting-service
 	go func() {
 		defer wg.Done()
-		ruleInfo, ruleErr = a.fetchRule(flagName)
+		ruleInfo, ruleErr = a.fetchRule(requestCtx, flagName)
 	}()
 
 	wg.Wait()
@@ -103,12 +104,15 @@ func (a *App) fetchFromServices(flagName string) (*CombinedFlagInfo, error) {
 }
 
 // fetchFlag (função helper)
-func (a *App) fetchFlag(flagName string) (*Flag, error) {
+func (a *App) fetchFlag(requestCtx context.Context, flagName string) (*Flag, error) {
 	url := fmt.Sprintf("%s/flags/%s", a.FlagServiceURL, flagName)
 
 	apiKey := os.Getenv("SERVICE_API_KEY")
 	// #nosec G704
-	req, _ := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar requisicao HTTP: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// #nosec G704
@@ -141,11 +145,14 @@ func (a *App) fetchFlag(flagName string) (*Flag, error) {
 	return &flag, nil
 }
 
-func (a *App) fetchRule(flagName string) (*TargetingRule, error) {
+func (a *App) fetchRule(requestCtx context.Context, flagName string) (*TargetingRule, error) {
 	url := fmt.Sprintf("%s/rules/%s", a.TargetingServiceURL, flagName)
 	apiKey := os.Getenv("SERVICE_API_KEY") // Usa a mesma chave
 	// #nosec G704
-	req, _ := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("erro ao criar requisicao HTTP: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// #nosec G704

@@ -23,6 +23,9 @@ load_dotenv()
 # --- Inicialização do Flask ---
 app = Flask(__name__)
 
+from otel_setup import instrument_app
+instrument_app(app, "analytics-service")
+
 # --- Configuração ---
 AWS_REGION = os.getenv("AWS_REGION")
 SQS_QUEUE_URL = os.getenv("AWS_SQS_URL")

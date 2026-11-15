@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+COPY otel_setup.py .
 
 RUN adduser -D -h /home/appuser appuser \
     && chown -R appuser:appuser /app
