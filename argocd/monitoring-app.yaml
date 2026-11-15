@@ -10,7 +10,7 @@ spec:
     targetRevision: main
     path: monitoring/applications
     directory:
-      include: '{prometheus.yaml,dashboard-togglemaster.yaml}'
+      include: "{prometheus.yaml,dashboard-togglemaster.yaml,loki.yaml,alloy.yaml}"
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -19,4 +19,4 @@ spec:
       prune: false
       selfHeal: true
     syncOptions:
-    - CreateNamespace=true
+      - CreateNamespace=true
