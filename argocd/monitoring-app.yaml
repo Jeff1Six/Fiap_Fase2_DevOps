@@ -10,7 +10,7 @@ spec:
     targetRevision: main
     path: monitoring/applications
     directory:
-      include: "{prometheus.yaml,dashboard-togglemaster.yaml,loki.yaml,alloy.yaml,dashboard-togglemaster-logs.yaml,alerts-togglemaster.yaml}"
+      include: "{prometheus.yaml,dashboard-togglemaster.yaml,loki.yaml,alloy.yaml,dashboard-togglemaster-logs.yaml,alerts-togglemaster.yaml,opentelemetry.yaml}"
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
