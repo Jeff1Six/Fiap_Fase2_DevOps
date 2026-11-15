@@ -77,6 +77,8 @@ spec:
           enabled: false
         gateway:
           enabled: true
+        test
+          enabled: false
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring
