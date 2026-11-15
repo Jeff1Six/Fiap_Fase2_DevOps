@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: togglemaster-grafana-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: '1'
+data:
+  togglemaster-dashboard.json: |-
+    {
+      "id": null,
+      "uid": "togglemaster-observabilidade",
+      "title": "ToggleMaster - Observabilidade",
+      "schemaVersion": 39,
+      "version": 1,
+      "tags": [
+        "togglemaster",
+        "fiap",
+        "fase4"
+      ],
+      "timezone": "browser",
+      "editable": true,
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "CPU por pod - ToggleMaster",
+          "type": "timeseries",
+          "datasource": null,
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (pod) (\n  rate(container_cpu_usage_seconds_total{namespace=\"desafio3\",container!=\"\",container!=\"POD\"}[5m])\n)",
+              "legendFormat": "{{pod}}",
+              "range": true
+            }
+          ],
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "cores"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Pods em execução - ToggleMaster",
+          "type": "timeseries",
+          "datasource": null,
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(\n  kube_pod_status_phase{namespace=\"desafio3\",phase=\"Running\"} == 1\n)",
+              "legendFormat": "Pods em execução",
+              "range": true
+            }
+          ],
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "Memória por pod - ToggleMaster",
+          "type": "timeseries",
+          "datasource": null,
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (pod) (\n  container_memory_working_set_bytes{namespace=\"desafio3\",container!=\"\",container!=\"POD\"}\n)",
+              "legendFormat": "{{pod}}",
+              "range": true
+            }
+          ],
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 9
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          }
+        }
+      ]
+    }
