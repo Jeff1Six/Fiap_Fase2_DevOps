@@ -16,8 +16,8 @@ spec:
         severity: warning
         team: togglemaster
       annotations:
-        summary: 'Deployment com réplicas indisponíveis: {{ $labels.deployment }}'
-        description: O deployment {{ $labels.deployment }} no namespace desafio3 possui menos réplicas disponíveis que o desejado por
+        summary: 'Deployment com rÃ©plicas indisponÃ­veis: {{ $labels.deployment }}'
+        description: O deployment {{ $labels.deployment }} no namespace desafio3 possui menos rÃ©plicas disponÃ­veis que o desejado por
           5 minutos.
     - alert: ToggleMasterContainerRestarts
       expr: increase(kube_pod_container_status_restarts_total{namespace="desafio3"}[15m]) > 0
@@ -26,8 +26,8 @@ spec:
         severity: warning
         team: togglemaster
       annotations:
-        summary: 'Reinício de contêiner detectado: {{ $labels.pod }}'
-        description: O contêiner {{ $labels.container }} reiniciou nos últimos 15 minutos no namespace desafio3.
+        summary: 'ReinÃ­cio de contÃªiner detectado: {{ $labels.pod }}'
+        description: O contÃªiner {{ $labels.container }} reiniciou nos Ãºltimos 15 minutos no namespace desafio3.
 
 ---
 apiVersion: monitoring.coreos.com/v1alpha1
@@ -62,3 +62,14 @@ spec:
           severity: warning
           description: '{{ .CommonAnnotations.summary }}'
           client: ToggleMaster - FIAP Fase 4
+      slackConfigs:
+        - apiURL:
+            name: slack-credentials
+            key: webhook-url
+          sendResolved: true
+          title: '[{{ .Status | toUpper }}] ToggleMaster - {{ .CommonLabels.alertname }}'
+          text: >-
+            *Alerta:* {{ .CommonLabels.alertname }}
+            *Namespace:* {{ .CommonLabels.namespace }}
+            *Descricao:* {{ .CommonAnnotations.summary }}
+            *Status:* {{ .Status }}
