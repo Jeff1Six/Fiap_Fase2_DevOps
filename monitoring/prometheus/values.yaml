@@ -1,4 +1,4 @@
-﻿# ToggleMaster - Fase 4
+# ToggleMaster - Fase 4
 # Prometheus + Grafana - AWS Academy
 
 fullnameOverride: togglemaster-monitoring
@@ -7,7 +7,17 @@ defaultRules:
   create: false
 
 alertmanager:
-  enabled: false
+  enabled: true
+
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
 
 grafana:
   enabled: true
