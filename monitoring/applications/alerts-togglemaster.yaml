@@ -28,3 +28,37 @@ spec:
       annotations:
         summary: 'Reinício de contêiner detectado: {{ $labels.pod }}'
         description: O contêiner {{ $labels.container }} reiniciou nos últimos 15 minutos no namespace desafio3.
+
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: togglemaster-pagerduty
+  namespace: monitoring
+  labels:
+    app: togglemaster-pagerduty
+spec:
+  route:
+    receiver: pagerduty
+    groupBy:
+      - alertname
+      - namespace
+    groupWait: 10s
+    groupInterval: 1m
+    repeatInterval: 4h
+    matchers:
+      - name: team
+        value: togglemaster
+      - name: severity
+        value: warning
+
+  receivers:
+    - name: pagerduty
+      pagerdutyConfigs:
+        - routingKey:
+            name: pagerduty-credentials
+            key: routing-key
+          sendResolved: true
+          severity: warning
+          description: '{{ .CommonAnnotations.summary }}'
+          client: ToggleMaster - FIAP Fase 4

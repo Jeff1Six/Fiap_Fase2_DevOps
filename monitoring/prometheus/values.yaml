@@ -11,6 +11,11 @@ alertmanager:
 
   alertmanagerSpec:
     replicas: 1
+    alertmanagerConfigSelector:
+      matchLabels:
+        app: togglemaster-pagerduty
+    alertmanagerConfigMatcherStrategy:
+      type: None
     resources:
       requests:
         cpu: 25m
