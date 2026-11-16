@@ -68,7 +68,10 @@ spec:
           service:
             pipelines:
               logs: null
-              metrics: null
+              metrics:
+                receivers: [otlp]
+                processors: [memory_limiter, batch]
+                exporters: [otlp_http/newrelic]
               traces:
                 receivers: [otlp]
                 processors: [memory_limiter, batch]
