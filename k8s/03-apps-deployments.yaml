@@ -189,7 +189,7 @@ spec:
               \  FOR EACH ROW\n  EXECUTE PROCEDURE trigger_set_timestamp();\n\"\n"
       containers:
         - name: flag-service
-          image: 797332046614.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:36c1de5198d06abbe6f36dbcd9f945fc77eec0a6
+          image: 797332046614.dkr.ecr.us-east-1.amazonaws.com/togglemaster-flag-service:5077e5cb5d9a0e678fa52dd9ef35516f4da1a078
           ports:
             - containerPort: 8002
           env:
