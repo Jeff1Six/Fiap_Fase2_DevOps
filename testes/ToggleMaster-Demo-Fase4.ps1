@@ -19,7 +19,7 @@ param(
     [ValidateSet('All','Overview','SelfHealing','Incident')]
     [string]$Scenario = 'All',
     [switch]$RunFaults,
-    [int]$FiringTimeoutSec = 360,
+    [int]$FiringTimeoutSec = 60,
     [int]$EvidencePauseSec = 45,
     [string]$Namespace = 'desafio3',
     [string]$MonitoringNamespace = 'monitoring',
@@ -37,7 +37,7 @@ $script:TranscriptStarted = $false
 $script:IncidentCreated = $false
 $script:Results = New-Object System.Collections.ArrayList
 
-if ($FiringTimeoutSec -lt 360) { throw 'Use FiringTimeoutSec de pelo menos 360s (a regra possui for: 5m).' }
+if ($FiringTimeoutSec -lt 60) { throw 'Use FiringTimeoutSec de pelo menos 50 (a regra possui for: 1m).' }
 if ($EvidencePauseSec -lt 0) { throw 'EvidencePauseSec nao pode ser negativo.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path (Get-Location).Path ('evidencias-fase4-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
