@@ -8,8 +8,9 @@ param(
     [string]$TestUserId = "user-123",
     [switch]$AtualizarKubeconfig,
     [switch]$SemPausa,
-    [int]$HpaLoadPods = 5,
-    [int]$HpaMaxWaitSeconds = 180
+    [int]$HpaLoadPods = 2,
+    [int]$HpaLoadSeconds = 60,
+    [int]$HpaMaxWaitSeconds = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -1078,6 +1079,7 @@ try {
     Write-Host "Min replicas:      $minReplicas"
     Write-Host "Max replicas:      $maxReplicas"
     Write-Host "Pods de carga:     $HpaLoadPods"
+    Write-Host "Duracao da carga:  $HpaLoadSeconds segundos"
     Write-Host "Tempo maximo:      $HpaMaxWaitSeconds segundos"
     Write-Host ""
 
@@ -1104,20 +1106,28 @@ try {
     }
 
     $replicasAntes = if ($deployment.status.replicas) { [int]$deployment.status.replicas } else { 0 }
+    if ($replicasAntes -ge $maxReplicas) {
+        throw "HPA ja atingiu maxReplicas=$maxReplicas. Nao gerarei carga adicional; aguarde estabilizacao."
+    }
     $readyAntes = if ($deployment.status.readyReplicas) { [int]$deployment.status.readyReplicas } else { 0 }
 
     Write-Host "Replicas antes da carga: $replicasAntes (Ready: $readyAntes)" -ForegroundColor Cyan
     Write-Host ""
 
-    # O endpoint interno evita depender do Ingress durante o teste de carga.
+    # A carga TEM PRAZO DETERMINADO, mesmo se o script for interrompido.
+    # Evita loops infinitos e carga residual no Evaluation.
+    if ($HpaLoadSeconds -lt 10 -or $HpaLoadSeconds -gt 180) {
+        throw "HpaLoadSeconds deve ficar entre 10 e 180 segundos."
+    }
+
     if ($targetDeployment -eq "evaluation-service") {
         $targetUrl = "http://evaluation-service-svc:8080/evaluate?user_id=hpa-load-`$i&flag_name=$FlagName"
-        $loadCommand = 'i=0; while true; do i=$((i+1)); wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; done'
+        $loadCommand = 'i=0; end=$(($(date +%s)+' + $HpaLoadSeconds + ')); while [ "$(date +%s)" -lt "$end" ]; do i=$((i+1)); wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; sleep 0.1; done'
     }
     else {
         $serviceName = "$targetDeployment-svc"
         $targetUrl = "http://${serviceName}:8080/health"
-        $loadCommand = 'while true; do wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; done'
+        $loadCommand = 'end=$(($(date +%s)+' + $HpaLoadSeconds + ')); while [ "$(date +%s)" -lt "$end" ]; do wget -q -T 2 -O /dev/null "' + $targetUrl + '" || true; sleep 0.1; done'
     }
 
     Write-Host "Gerando carga interna contra: $targetUrl" -ForegroundColor Yellow
@@ -1130,6 +1140,7 @@ try {
             -n $Namespace `
             --restart=Never `
             --image=busybox:1.36 `
+            --labels=app=togglemaster-hpa-load `
             --command `
             -- /bin/sh -c $loadCommand | Out-Null
 
@@ -1233,7 +1244,8 @@ finally {
                 2>$null | Out-Null
         }
 
-        Write-Ok "Carga removida. O HPA podera reduzir as replicas apos o periodo de estabilizacao."
+        Write-Ok "Remocao solicitada. O HPA podera reduzir as replicas apos estabilizacao."
+        & kubectl get pods -n $Namespace -l app=togglemaster-hpa-load 2>$null
     }
 }
 
